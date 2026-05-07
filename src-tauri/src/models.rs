@@ -1,0 +1,74 @@
+use serde::{Deserialize, Serialize};
+
+// 对外暴露的工作副本元信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingCopyEntry {
+    pub id: String,
+    pub path: String,
+    pub url: Option<String>,
+    pub repository_root: Option<String>,
+    pub revision: Option<u64>,
+    pub last_seen_at: Option<String>,
+}
+
+// svn info --xml 解析结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SvnInfo {
+    pub path: String,
+    pub url: String,
+    pub repository_root: String,
+    pub repository_uuid: Option<String>,
+    pub revision: u64,
+    pub kind: String,
+    pub relative_url: Option<String>,
+    pub last_changed_revision: Option<u64>,
+    pub last_changed_author: Option<String>,
+    pub last_changed_date: Option<String>,
+}
+
+// svn status --xml 单个文件项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SvnStatusEntry {
+    pub path: String,
+    pub item: String,         // modified/added/deleted/normal/unversioned/conflicted/missing/...
+    pub props: Option<String>,
+    pub copied: bool,
+    pub revision: Option<u64>,
+    pub commit_revision: Option<u64>,
+    pub commit_author: Option<String>,
+    pub commit_date: Option<String>,
+}
+
+// svn log 单条提交
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SvnLogEntry {
+    pub revision: u64,
+    pub author: Option<String>,
+    pub date: Option<String>,
+    pub message: Option<String>,
+    pub paths: Vec<SvnLogPath>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SvnLogPath {
+    pub path: String,
+    pub action: String,        // A/M/D/R
+    pub kind: Option<String>,
+    pub copyfrom_path: Option<String>,
+    pub copyfrom_rev: Option<u64>,
+}
+
+// 长任务事件载荷
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum TaskEvent {
+    Started { task_id: String },
+    Stdout { task_id: String, line: String },
+    Stderr { task_id: String, line: String },
+    Finished { task_id: String, success: bool, exit_code: Option<i32> },
+}

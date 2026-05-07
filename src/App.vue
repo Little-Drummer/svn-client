@@ -1,23 +1,55 @@
 <script setup lang="ts">
-// import HelloWorld from './components/HelloWorld.vue'
-import { invoke } from "@tauri-apps/api/core"
+import { onMounted, ref } from 'vue'
+import {
+  NConfigProvider,
+  NMessageProvider,
+  NDialogProvider,
+  NNotificationProvider,
+  NLoadingBarProvider,
+  zhCN,
+  dateZhCN,
+  darkTheme,
+  type GlobalThemeOverrides,
+} from 'naive-ui'
 
-async function test() {
+import MainLayout from './views/MainLayout.vue'
+import { useTasksStore } from './stores/tasks'
 
-  const result = await invoke("hello", {
-
-    name: "svn"
-
-  })
-
-  console.log(result)
-
+const themeOverrides: GlobalThemeOverrides = {
+  common: {
+    primaryColor: '#1A6BFF',
+    primaryColorHover: '#3B82F6',
+    primaryColorPressed: '#1957D9',
+    primaryColorSuppl: '#3B82F6',
+  },
 }
+
+const isDark = ref(matchMedia('(prefers-color-scheme: dark)').matches)
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+  isDark.value = e.matches
+})
+
+const tasks = useTasksStore()
+onMounted(() => {
+  tasks.ensureListener()
+})
 </script>
 
 <template>
-<!--  <HelloWorld />-->
-  <button @click="test">
-    test
-  </button>
+  <n-config-provider
+    :theme="isDark ? darkTheme : null"
+    :theme-overrides="themeOverrides"
+    :locale="zhCN"
+    :date-locale="dateZhCN"
+  >
+    <n-loading-bar-provider>
+      <n-message-provider>
+        <n-dialog-provider>
+          <n-notification-provider>
+            <MainLayout />
+          </n-notification-provider>
+        </n-dialog-provider>
+      </n-message-provider>
+    </n-loading-bar-provider>
+  </n-config-provider>
 </template>
