@@ -20,10 +20,24 @@ const toast = useErrorToast()
 
 const message = ref('')
 const taskId = ref<string | null>(null)
+const draftKey = computed(() => `svn-client.commit-draft.${props.workingCopy.id}`)
 const submitting = computed(() => {
   if (!taskId.value) return false
   const t = tasksStore.tasks.get(taskId.value)
   return !!t && !t.finished
+})
+
+watch(
+  () => props.workingCopy.id,
+  () => {
+    message.value = localStorage.getItem(draftKey.value) ?? ''
+  },
+  { immediate: true },
+)
+
+watch(message, (value) => {
+  if (value.trim()) localStorage.setItem(draftKey.value, value)
+  else localStorage.removeItem(draftKey.value)
 })
 
 const canCommit = computed(
@@ -61,6 +75,7 @@ watch(
       const t = taskId.value ? tasksStore.tasks.get(taskId.value) : null
       if (t?.success) {
         message.value = ''
+        localStorage.removeItem(draftKey.value)
         emit('done')
       }
     }
@@ -108,14 +123,15 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  gap: 8px;
-  padding: 8px;
+  gap: 10px;
+  padding: 10px;
+  background: var(--panel-bg-subtle);
 }
 .summary {
   font-size: 12px;
 }
 .hint {
-  opacity: 0.7;
+  color: var(--text-muted);
 }
 .actions {
   display: flex;

@@ -6,12 +6,7 @@ use super::runner::run_svn;
 pub fn svn_diff_file(svn_bin: &str, target: &str) -> AppResult<String> {
     let out = run_svn(
         svn_bin,
-        &[
-            "diff",
-            "--non-interactive",
-            "--internal-diff",
-            target,
-        ],
+        &["diff", "--non-interactive", "--internal-diff", target],
     )?;
     Ok(out.stdout)
 }
@@ -35,15 +30,6 @@ pub fn svn_diff_revision(svn_bin: &str, target: &str, revision: u64) -> AppResul
 
 /// 读取本地文件原始字节（diff 视图想做 side-by-side 时需要 BASE 文件）
 pub fn svn_cat_base(svn_bin: &str, target: &str) -> AppResult<String> {
-    let out = run_svn(
-        svn_bin,
-        &[
-            "cat",
-            "--non-interactive",
-            "-r",
-            "BASE",
-            target,
-        ],
-    )?;
+    let out = run_svn(svn_bin, &["cat", "--non-interactive", "-r", "BASE", target])?;
     Ok(out.stdout)
 }

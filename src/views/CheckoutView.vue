@@ -16,6 +16,9 @@ import TaskOutput from '../components/TaskOutput.vue'
 import { api, describeError } from '../api/svn'
 import { useTasksStore } from '../stores/tasks'
 import { useWorkingCopiesStore } from '../stores/workingCopies'
+import type { RepositoryEntry } from '../types/svn'
+
+const props = defineProps<{ repository?: RepositoryEntry | null }>()
 
 const tasksStore = useTasksStore()
 const wcStore = useWorkingCopiesStore()
@@ -64,6 +67,16 @@ async function start() {
     message.error(describeError(e))
   }
 }
+
+watch(
+  () => props.repository?.id,
+  () => {
+    if (!props.repository) return
+    url.value = props.repository.url
+    username.value = props.repository.username ?? ''
+  },
+  { immediate: true },
+)
 
 watch(
   () => taskId.value && tasksStore.tasks.get(taskId.value)?.finished,
@@ -137,16 +150,24 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 12px;
-  gap: 12px;
+  padding: 16px;
+  gap: 14px;
+  background: var(--panel-bg-muted);
 }
 .card {
   flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
 }
 .output-wrap {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg);
 }
 </style>

@@ -12,6 +12,42 @@ pub struct WorkingCopyEntry {
     pub last_seen_at: Option<String>,
 }
 
+// 保存的远端仓库配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryEntry {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub username: Option<String>,
+    pub last_accessed_at: Option<String>,
+}
+
+// svn list --xml 远端目录项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteListEntry {
+    pub name: String,
+    pub path: String,
+    pub url: String,
+    pub kind: String,
+    pub size: Option<u64>,
+    pub revision: Option<u64>,
+    pub author: Option<String>,
+    pub date: Option<String>,
+}
+
+// 本地工作副本文件树节点
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingCopyFileEntry {
+    pub name: String,
+    pub path: String,
+    pub relative_path: String,
+    pub kind: String,
+    pub children: Vec<WorkingCopyFileEntry>,
+}
+
 // svn info --xml 解析结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +69,7 @@ pub struct SvnInfo {
 #[serde(rename_all = "camelCase")]
 pub struct SvnStatusEntry {
     pub path: String,
-    pub item: String,         // modified/added/deleted/normal/unversioned/conflicted/missing/...
+    pub item: String, // modified/added/deleted/normal/unversioned/conflicted/missing/...
     pub props: Option<String>,
     pub copied: bool,
     pub revision: Option<u64>,
@@ -57,7 +93,7 @@ pub struct SvnLogEntry {
 #[serde(rename_all = "camelCase")]
 pub struct SvnLogPath {
     pub path: String,
-    pub action: String,        // A/M/D/R
+    pub action: String, // A/M/D/R
     pub kind: Option<String>,
     pub copyfrom_path: Option<String>,
     pub copyfrom_rev: Option<u64>,
@@ -67,8 +103,20 @@ pub struct SvnLogPath {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum TaskEvent {
-    Started { task_id: String },
-    Stdout { task_id: String, line: String },
-    Stderr { task_id: String, line: String },
-    Finished { task_id: String, success: bool, exit_code: Option<i32> },
+    Started {
+        task_id: String,
+    },
+    Stdout {
+        task_id: String,
+        line: String,
+    },
+    Stderr {
+        task_id: String,
+        line: String,
+    },
+    Finished {
+        task_id: String,
+        success: bool,
+        exit_code: Option<i32>,
+    },
 }

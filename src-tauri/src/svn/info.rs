@@ -43,7 +43,11 @@ struct Commit {
 
 pub fn svn_info(svn_bin: &str, target: &str) -> AppResult<SvnInfo> {
     let out = run_svn(svn_bin, &["info", "--xml", "--non-interactive", target])?;
-    let parsed: InfoRoot = quick_xml::de::from_str(&out.stdout)?;
+    parse_svn_info_xml(&out.stdout)
+}
+
+pub fn parse_svn_info_xml(xml: &str) -> AppResult<SvnInfo> {
+    let parsed: InfoRoot = quick_xml::de::from_str(xml)?;
     let entry = parsed
         .entries
         .into_iter()

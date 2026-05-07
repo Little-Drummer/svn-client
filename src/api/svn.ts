@@ -4,7 +4,10 @@ import type {
   SvnInfo,
   SvnLogEntry,
   SvnStatusEntry,
+  RepositoryEntry,
+  RemoteListEntry,
   WorkingCopyEntry,
+  WorkingCopyFileEntry,
 } from '../types/svn'
 
 export const api = {
@@ -13,12 +16,32 @@ export const api = {
   getSvnBin: () => invoke<string>('get_svn_bin'),
   setSvnBin: (bin: string | null) => invoke<void>('set_svn_bin', { bin }),
 
+  // 远端仓库
+  listRepositories: () => invoke<RepositoryEntry[]>('list_repositories'),
+  saveRepository: (params: {
+    id?: string
+    name: string
+    url: string
+    username?: string
+  }) => invoke<RepositoryEntry>('save_repository', params),
+  removeRepository: (id: string) => invoke<void>('remove_repository', { id }),
+  testRepositoryConnection: (params: { id?: string; url: string; username?: string }) =>
+    invoke<SvnInfo>('test_repository_connection', params),
+  listRemote: (params: { url: string; username?: string }) =>
+    invoke<RemoteListEntry[]>('svn_list_remote', params),
+  catRemote: (params: { url: string; username?: string }) =>
+    invoke<string>('svn_cat_remote', params),
+
   // 工作副本
   listWorkingCopies: () => invoke<WorkingCopyEntry[]>('list_working_copies'),
   addWorkingCopy: (path: string) => invoke<WorkingCopyEntry>('add_working_copy', { path }),
   removeWorkingCopy: (id: string) => invoke<void>('remove_working_copy', { id }),
   refreshWorkingCopy: (id: string) =>
     invoke<WorkingCopyEntry>('refresh_working_copy', { id }),
+  listWorkingCopyFiles: (root: string) =>
+    invoke<WorkingCopyFileEntry[]>('list_working_copy_files', { root }),
+  createWorkingCopyFolder: (parentPath: string, name: string) =>
+    invoke<string>('create_working_copy_folder', { parentPath, name }),
 
   // 查询
   info: (path: string) => invoke<SvnInfo>('svn_get_info', { path }),
@@ -29,6 +52,9 @@ export const api = {
     limit?: number
     revisionRange?: string
     search?: string
+    author?: string
+    dateFrom?: string
+    dateTo?: string
     withPaths?: boolean
   }) => invoke<SvnLogEntry[]>('svn_get_log', params),
   diff: (path: string) => invoke<string>('svn_get_diff', { path }),
@@ -37,6 +63,9 @@ export const api = {
   baseContent: (path: string) => invoke<string>('svn_get_base_content', { path }),
   readFileText: (path: string) => invoke<string>('read_file_text', { path }),
   revert: (paths: string[]) => invoke<void>('svn_revert', { paths }),
+  add: (paths: string[]) => invoke<void>('svn_add', { paths }),
+  delete: (paths: string[]) => invoke<void>('svn_delete', { paths }),
+  ignore: (paths: string[]) => invoke<void>('svn_ignore', { paths }),
 
   // 长任务
   startCommit: (paths: string[], message: string) =>

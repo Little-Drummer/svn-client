@@ -46,6 +46,9 @@ pub struct LogOptions<'a> {
     pub limit: u32,
     pub revision_range: Option<&'a str>, // 如 "HEAD:1"
     pub search: Option<&'a str>,
+    pub author: Option<&'a str>,
+    pub date_from: Option<&'a str>,
+    pub date_to: Option<&'a str>,
     pub with_paths: bool,
 }
 
@@ -61,7 +64,16 @@ pub fn svn_log(svn_bin: &str, opts: &LogOptions) -> AppResult<Vec<SvnLogEntry>> 
     if opts.with_paths {
         args.push("--verbose".into());
     }
-    if let Some(range) = opts.revision_range {
+    let date_range = match (opts.date_from, opts.date_to) {
+        (Some(from), Some(to)) if !from.trim().is_empty() && !to.trim().is_empty() => {
+            Some(format!("{{{}}}:{{{}}}", to.trim(), from.trim()))
+        }
+        (Some(from), _) if !from.trim().is_empty() => Some(format!("HEAD:{{{}}}", from.trim())),
+        (_, Some(to)) if !to.trim().is_empty() => Some(format!("{{{}}}:1", to.trim())),
+        _ => None,
+    };
+
+    if let Some(range) = opts.revision_range.or(date_range.as_deref()) {
         args.push("-r".into());
         args.push(range.into());
     }
@@ -77,7 +89,7 @@ pub fn svn_log(svn_bin: &str, opts: &LogOptions) -> AppResult<Vec<SvnLogEntry>> 
     let out = run_svn(svn_bin, &arg_refs)?;
     let parsed: LogRoot = quick_xml::de::from_str(&out.stdout)?;
 
-    let result = parsed
+    let mut result: Vec<SvnLogEntry> = parsed
         .entries
         .into_iter()
         .map(|e| SvnLogEntry {
@@ -102,5 +114,18 @@ pub fn svn_log(svn_bin: &str, opts: &LogOptions) -> AppResult<Vec<SvnLogEntry>> 
                 .unwrap_or_default(),
         })
         .collect();
+    if let Some(author) = opts.author {
+        let needle = author.trim().to_lowercase();
+        if !needle.is_empty() {
+            result.retain(|entry| {
+                entry
+                    .author
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(&needle)
+            });
+        }
+    }
     Ok(result)
 }

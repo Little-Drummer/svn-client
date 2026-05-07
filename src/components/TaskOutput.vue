@@ -41,30 +41,38 @@ const task = computed<RunningTask | null>(() =>
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  border-top: 1px solid rgba(127, 127, 127, 0.2);
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: var(--panel-bg);
 }
 .task-header {
   display: flex;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 7px 10px;
   align-items: center;
   font-size: 12px;
+  background: var(--panel-bg-subtle);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .title {
-  opacity: 0.8;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .log {
   flex: 1;
   min-height: 0;
   font-size: 11px;
-  background: rgba(127, 127, 127, 0.06);
+  background: var(--panel-bg-muted);
 }
 .line {
-  padding: 0 8px;
+  padding: 1px 10px;
   white-space: pre-wrap;
   word-break: break-all;
+  color: var(--text-muted);
 }
 .line.err {
-  color: #d23030;
+  color: #dc2626;
 }
 </style>

@@ -22,6 +22,10 @@ const entries = ref<SvnLogEntry[]>([])
 const loading = ref(false)
 const limit = ref<number>(50)
 const search = ref('')
+const author = ref('')
+const revisionRange = ref('')
+const dateFrom = ref('')
+const dateTo = ref('')
 
 const selectedRev = ref<number | null>(null)
 const diffText = ref<string | null>(null)
@@ -38,6 +42,10 @@ async function reload() {
       path: props.workingCopy.path,
       limit: limit.value || 50,
       search: search.value || undefined,
+      author: author.value || undefined,
+      revisionRange: revisionRange.value || undefined,
+      dateFrom: dateFrom.value || undefined,
+      dateTo: dateTo.value || undefined,
       withPaths: true,
     })
     if (entries.value.length > 0 && selectedRev.value == null) {
@@ -103,7 +111,8 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
   <div class="log-view">
     <section class="left">
       <div class="toolbar">
-        <n-input v-model:value="search" placeholder="搜索作者/消息" size="small" />
+        <n-input v-model:value="search" placeholder="关键词" size="small" />
+        <n-input v-model:value="author" placeholder="作者" size="small" />
         <n-input-number
           v-model:value="limit"
           :min="1"
@@ -111,7 +120,12 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
           size="small"
           style="width: 100px"
         />
+        <n-input v-model:value="revisionRange" placeholder="HEAD:1" size="small" />
         <n-button size="small" @click="reload">刷新</n-button>
+      </div>
+      <div class="toolbar secondary">
+        <n-input v-model:value="dateFrom" placeholder="开始日期 2026-01-01" size="small" />
+        <n-input v-model:value="dateTo" placeholder="结束日期 2026-05-07" size="small" />
       </div>
       <n-scrollbar class="list">
         <n-spin v-if="loading" />
@@ -161,36 +175,44 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
 <style scoped>
 .log-view {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: 380px 1fr;
   height: 100%;
   min-height: 0;
+  background: var(--panel-bg);
 }
 .left {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba(127, 127, 127, 0.2);
+  border-right: 1px solid var(--border);
+  background: var(--panel-bg-subtle);
   min-height: 0;
 }
 .toolbar {
   display: flex;
   gap: 6px;
-  padding: 6px 8px;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--toolbar-bg);
+}
+.toolbar.secondary {
+  padding-top: 0;
 }
 .list {
   flex: 1;
   min-height: 0;
 }
 .rev-item {
-  padding: 6px 10px;
+  padding: 8px 10px;
   cursor: pointer;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.1);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--panel-bg);
 }
 .rev-item:hover {
-  background: rgba(127, 127, 127, 0.07);
+  background: var(--panel-bg-muted);
 }
 .rev-item.active {
-  background: rgba(26, 107, 255, 0.12);
+  background: var(--accent-row);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .rev-head {
   display: flex;
@@ -205,9 +227,10 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
   white-space: nowrap;
 }
 .date {
-  opacity: 0.6;
+  color: var(--text-muted);
 }
 .msg {
+  color: var(--text-strong);
   font-size: 13px;
   margin-top: 3px;
   overflow: hidden;
@@ -220,8 +243,9 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
   min-height: 0;
 }
 .rev-detail {
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-bg-subtle);
   max-height: 40%;
   overflow: auto;
 }
@@ -241,7 +265,7 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
 }
 .files-title {
   font-size: 12px;
-  opacity: 0.7;
+  color: var(--text-muted);
   margin-bottom: 4px;
 }
 .file-line {

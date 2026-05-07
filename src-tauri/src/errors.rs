@@ -87,8 +87,12 @@ impl serde::Serialize for AppError {
             },
             AppError::SvnNotFound(m) => AppErrorPayload::SvnNotFound { message: m.clone() },
             AppError::XmlParse(m) => AppErrorPayload::XmlParse { message: m.clone() },
-            AppError::Io(e) => AppErrorPayload::Io { message: e.to_string() },
-            AppError::Json(e) => AppErrorPayload::Json { message: e.to_string() },
+            AppError::Io(e) => AppErrorPayload::Io {
+                message: e.to_string(),
+            },
+            AppError::Json(e) => AppErrorPayload::Json {
+                message: e.to_string(),
+            },
             AppError::InvalidPath(m) => AppErrorPayload::InvalidPath { message: m.clone() },
             AppError::NotWorkingCopy(m) => AppErrorPayload::NotWorkingCopy { message: m.clone() },
             AppError::TaskNotFound(m) => AppErrorPayload::TaskNotFound { message: m.clone() },

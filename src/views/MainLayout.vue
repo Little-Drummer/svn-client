@@ -3,20 +3,25 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { NTabs, NTabPane, NButton, NTag, NTooltip, useMessage } from 'naive-ui'
 
 import WorkingCopyList from '../components/WorkingCopyList.vue'
+import RepositoryList from '../components/RepositoryList.vue'
 import StatusView from '../views/StatusView.vue'
 import LogView from '../views/LogView.vue'
 import CheckoutView from '../views/CheckoutView.vue'
+import RemoteBrowserView from '../views/RemoteBrowserView.vue'
 import EnvWarning from '../components/EnvWarning.vue'
 
 import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { api, describeError } from '../api/svn'
+import type { RepositoryEntry } from '../types/svn'
 
 const wcStore = useWorkingCopiesStore()
-const tab = ref<'status' | 'log' | 'checkout'>('status')
+const tab = ref<'status' | 'log' | 'remote' | 'checkout'>('status')
 const message = useMessage()
 
 const svnVersion = ref<string | null>(null)
 const svnError = ref<string | null>(null)
+const checkoutRepo = ref<RepositoryEntry | null>(null)
+const browseRepo = ref<RepositoryEntry | null>(null)
 
 async function detectSvn() {
   svnError.value = null
@@ -53,11 +58,22 @@ async function refreshSelected() {
     message.error(describeError(e))
   }
 }
+
+function checkoutRepository(repo: RepositoryEntry) {
+  checkoutRepo.value = repo
+  tab.value = 'checkout'
+}
+
+function browseRepository(repo: RepositoryEntry) {
+  browseRepo.value = repo
+  tab.value = 'remote'
+}
 </script>
 
 <template>
   <div class="layout">
     <aside class="sidebar">
+      <RepositoryList @checkout="checkoutRepository" @browse="browseRepository" />
       <WorkingCopyList />
     </aside>
     <main class="main">
@@ -85,8 +101,11 @@ async function refreshSelected() {
           <LogView v-if="selected" :working-copy="selected" />
           <div v-else class="empty-pane">先在左侧添加并选择一个工作副本</div>
         </n-tab-pane>
+        <n-tab-pane name="remote" tab="远端浏览">
+          <RemoteBrowserView :repository="browseRepo" @checkout="checkoutRepository" />
+        </n-tab-pane>
         <n-tab-pane name="checkout" tab="检出">
-          <CheckoutView />
+          <CheckoutView :repository="checkoutRepo" />
         </n-tab-pane>
       </n-tabs>
 
@@ -107,12 +126,17 @@ async function refreshSelected() {
 <style scoped>
 .layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 300px 1fr;
   height: 100vh;
   width: 100vw;
+  background:
+    radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--accent-soft) 44%, transparent), transparent 360px),
+    var(--app-bg);
+  color: var(--text);
 }
 .sidebar {
-  border-right: 1px solid rgba(127, 127, 127, 0.25);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -122,13 +146,18 @@ async function refreshSelected() {
   flex-direction: column;
   height: 100%;
   min-width: 0;
+  background: var(--panel-bg);
 }
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent),
+    var(--toolbar-bg);
+  backdrop-filter: blur(12px);
   gap: 12px;
 }
 .title {
@@ -138,14 +167,16 @@ async function refreshSelected() {
   min-width: 0;
 }
 .path {
+  color: var(--text-strong);
   font-size: 13px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 60vw;
 }
 .empty {
-  opacity: 0.6;
+  color: var(--text-muted);
 }
 .tabs {
   flex: 1;
@@ -154,7 +185,12 @@ async function refreshSelected() {
   flex-direction: column;
 }
 .tabs :deep(.n-tabs-nav) {
-  padding: 0 12px;
+  padding: 0 14px;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tabs :deep(.n-tabs-tab) {
+  padding: 10px 0;
 }
 .tabs :deep(.n-tab-pane) {
   height: 100%;
@@ -170,13 +206,14 @@ async function refreshSelected() {
 .empty-pane {
   padding: 32px;
   text-align: center;
-  opacity: 0.6;
+  color: var(--text-muted);
 }
 .statusbar {
-  border-top: 1px solid rgba(127, 127, 127, 0.25);
-  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  padding: 5px 14px;
   font-size: 12px;
-  opacity: 0.8;
+  color: var(--text-muted);
+  background: var(--panel-bg-muted);
   display: flex;
   gap: 16px;
 }

@@ -17,10 +17,17 @@ import { useTasksStore } from './stores/tasks'
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {
-    primaryColor: '#1A6BFF',
-    primaryColorHover: '#3B82F6',
-    primaryColorPressed: '#1957D9',
-    primaryColorSuppl: '#3B82F6',
+    primaryColor: '#0F8B8D',
+    primaryColorHover: '#0C7779',
+    primaryColorPressed: '#096163',
+    primaryColorSuppl: '#4FD1C5',
+    borderRadius: '6px',
+    borderRadiusSmall: '5px',
+    fontFamily:
+      "system-ui, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif",
+  },
+  Tag: {
+    borderRadius: '5px',
   },
 }
 

@@ -9,6 +9,33 @@ export interface WorkingCopyEntry {
   lastSeenAt?: string | null
 }
 
+export interface RepositoryEntry {
+  id: string
+  name: string
+  url: string
+  username?: string | null
+  lastAccessedAt?: string | null
+}
+
+export interface RemoteListEntry {
+  name: string
+  path: string
+  url: string
+  kind: 'dir' | 'file' | string
+  size?: number | null
+  revision?: number | null
+  author?: string | null
+  date?: string | null
+}
+
+export interface WorkingCopyFileEntry {
+  name: string
+  path: string
+  relativePath: string
+  kind: 'dir' | 'file' | string
+  children: WorkingCopyFileEntry[]
+}
+
 export interface SvnInfo {
   path: string
   url: string

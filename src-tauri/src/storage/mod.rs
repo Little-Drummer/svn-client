@@ -6,11 +6,14 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::errors::{AppError, AppResult};
-use crate::models::WorkingCopyEntry;
+use crate::models::{RepositoryEntry, WorkingCopyEntry};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
     pub svn_bin: Option<String>,
+    #[serde(default)]
+    pub repositories: Vec<RepositoryEntry>,
+    #[serde(default)]
     pub working_copies: Vec<WorkingCopyEntry>,
 }
 
