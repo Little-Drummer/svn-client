@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NInput, NTooltip } from 'naive-ui'
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import TaskOutput from './TaskOutput.vue'
 import { api } from '../api/svn'
 import { useTasksStore } from '../stores/tasks'
@@ -60,20 +62,22 @@ watch(
     </div>
     <div class="row">
       <span class="label">目标版本</span>
-      <n-tooltip>
-        <template #trigger>
-          <n-input
-            v-model:value="revision"
-            placeholder="留空 = HEAD"
-            size="small"
-            :disabled="running"
-          />
-        </template>
-        可填具体 revision、HEAD、{2025-01-01} 等
-      </n-tooltip>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Input
+              v-model="revision"
+              placeholder="留空 = HEAD"
+              :disabled="running"
+              class="h-8"
+            />
+          </TooltipTrigger>
+          <TooltipContent>可填具体 revision、HEAD、{2025-01-01} 等</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
     <div class="actions">
-      <n-button type="primary" :loading="running" @click="start">更新</n-button>
+      <Button :disabled="running" @click="start">{{ running ? '更新中' : '更新' }}</Button>
     </div>
     <TaskOutput :task-id="taskId" />
   </div>

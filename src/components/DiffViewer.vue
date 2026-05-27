@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { NEmpty, NRadioButton, NRadioGroup, NSpin } from 'naive-ui'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import * as monaco from 'monaco-editor'
 
+import { Button } from '@/components/ui/button'
+import EmptyState from '@/components/ui-local/EmptyState.vue'
+import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
 import { ensureMonacoEnv } from '../composables/monaco-setup'
 
 type DiffMode = 'unified' | 'split'
@@ -114,16 +116,28 @@ watch(
 <template>
   <div class="diff-wrap">
     <div class="diff-toolbar">
-      <n-radio-group v-model:value="mode" size="small">
-        <n-radio-button value="unified">Unified</n-radio-button>
-        <n-radio-button value="split">左右对比</n-radio-button>
-      </n-radio-group>
+      <div class="segmented">
+        <Button
+          size="xs"
+          :variant="mode === 'unified' ? 'secondary' : 'ghost'"
+          @click="mode = 'unified'"
+        >
+          Unified
+        </Button>
+        <Button
+          size="xs"
+          :variant="mode === 'split' ? 'secondary' : 'ghost'"
+          @click="mode = 'split'"
+        >
+          左右对比
+        </Button>
+      </div>
       <span v-if="filename" class="diff-filename mono">{{ filename }}</span>
     </div>
     <div class="diff-body">
-      <n-spin v-if="loading" />
+      <LoadingSpinner v-if="loading" />
       <div v-else-if="isBinary" class="hint">二进制文件，无法在编辑器中对比。</div>
-      <n-empty v-else-if="isEmpty" description="没有改动" size="small" />
+      <EmptyState v-else-if="isEmpty" description="没有改动" />
       <div v-else ref="containerRef" class="monaco-host" />
     </div>
   </div>
@@ -140,8 +154,17 @@ watch(
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 10px;
+  padding: 5px 10px;
   border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+  background: var(--toolbar-bg);
+}
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-bg-muted);
 }
 .diff-filename {
   font-size: 12px;

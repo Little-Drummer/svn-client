@@ -1,21 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import {
-  NButton,
-  NEmpty,
-  NInput,
-  NSpin,
-  NTag,
-  useMessage,
-} from 'naive-ui'
 
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import EmptyState from '@/components/ui-local/EmptyState.vue'
+import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
+import { useAppToast } from '@/composables/use-app-toast'
 import { api, describeError } from '../api/svn'
 import type { RemoteListEntry, RepositoryEntry } from '../types/svn'
 
 const props = defineProps<{ repository: RepositoryEntry | null }>()
 const emit = defineEmits<{ checkout: [repo: RepositoryEntry] }>()
 
-const message = useMessage()
+const toast = useAppToast()
 const currentUrl = ref('')
 const entries = ref<RemoteListEntry[]>([])
 const selected = ref<RemoteListEntry | null>(null)
@@ -71,7 +69,7 @@ async function load(url = currentUrl.value) {
     })
   } catch (e) {
     entries.value = []
-    message.error(describeError(e))
+    toast.error('加载远端目录失败', describeError(e))
   } finally {
     loading.value = false
   }
@@ -99,7 +97,7 @@ async function previewEntry(entry: RemoteListEntry) {
       username: props.repository?.username ?? undefined,
     })
   } catch (e) {
-    message.error(describeError(e))
+    toast.error('加载文件失败', describeError(e))
   } finally {
     contentLoading.value = false
   }
@@ -136,22 +134,21 @@ watch(
     <template v-else>
       <header class="browser-toolbar">
         <div class="repo-title">
-          <n-tag size="small" type="info">{{ repository.name }}</n-tag>
+          <Badge variant="secondary">{{ repository.name }}</Badge>
           <span class="mono url" :title="currentUrl">{{ currentUrl }}</span>
         </div>
-        <n-button size="small" @click="load()">刷新</n-button>
-        <n-button size="small" type="primary" @click="checkoutCurrent">检出当前目录</n-button>
+        <Button size="sm" variant="outline" @click="load()">刷新</Button>
+        <Button size="sm" @click="checkoutCurrent">检出当前目录</Button>
       </header>
 
       <div class="url-row">
-        <n-input
-          v-model:value="manualUrl"
-          size="small"
+        <Input
+          v-model="manualUrl"
           class="mono"
           placeholder="输入远端 SVN URL"
           @keyup.enter="load(manualUrl)"
         />
-        <n-button size="small" @click="load(manualUrl)">打开</n-button>
+        <Button size="sm" variant="outline" @click="load(manualUrl)">打开</Button>
       </div>
 
       <div class="crumbs">
@@ -176,8 +173,8 @@ watch(
             <span>时间</span>
           </div>
           <div class="remote-scroll">
-            <n-spin v-if="loading" />
-            <n-empty v-else-if="entries.length === 0" description="目录为空" size="small" />
+            <LoadingSpinner v-if="loading" />
+            <EmptyState v-else-if="entries.length === 0" description="目录为空" />
             <template v-else>
               <div
                 v-for="entry in entries"
@@ -201,9 +198,9 @@ watch(
         <section v-if="previewOpen" class="preview">
           <div class="preview-head">
             <span class="mono" :title="selected?.url">{{ selected?.name ?? '文件预览' }}</span>
-            <n-button size="tiny" tertiary @click="closePreview">关闭</n-button>
+            <Button size="xs" variant="ghost" @click="closePreview">关闭</Button>
           </div>
-          <n-spin v-if="contentLoading" />
+          <LoadingSpinner v-if="contentLoading" />
           <pre v-else-if="fileContent" class="file-content mono">{{ fileContent }}</pre>
           <div v-else class="empty-preview">文件内容为空</div>
         </section>
@@ -218,9 +215,7 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 28%, transparent), transparent 120px),
-    var(--panel-bg);
+  background: var(--panel-bg);
 }
 .browser-toolbar,
 .url-row,
@@ -228,11 +223,9 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border-subtle);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.1), transparent),
-    var(--toolbar-bg);
+  background: var(--toolbar-bg);
 }
 .repo-title {
   display: flex;
@@ -249,7 +242,7 @@ watch(
   font-size: 12px;
   color: var(--text-muted);
 }
-.url-row .n-input {
+.url-row input {
   flex: 1;
 }
 .crumbs {
@@ -294,9 +287,7 @@ watch(
 }
 .remote-list {
   border-right: 1px solid var(--border);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 34%, transparent), transparent 220px),
-    var(--panel-bg-subtle);
+  background: var(--panel-bg-subtle);
 }
 .browser-body:not(.preview-open) .remote-list {
   border-right: 0;
@@ -306,12 +297,10 @@ watch(
   grid-template-columns: minmax(220px, 1fr) 84px 72px 110px 170px;
   gap: 10px;
   align-items: center;
-  min-height: 32px;
+  min-height: 30px;
   padding: 0 12px 0 42px;
   border-bottom: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 60%, transparent), transparent),
-    var(--panel-bg-muted);
+  background: var(--panel-bg-muted);
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
@@ -329,23 +318,18 @@ watch(
   grid-template-columns: 22px minmax(180px, 1fr) 84px 72px 110px 170px;
   gap: 10px;
   align-items: center;
-  min-height: 36px;
+  min-height: 32px;
   padding: 3px 12px 3px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent);
   cursor: pointer;
   font-size: 12px;
-  background: color-mix(in srgb, var(--panel-bg) 92%, transparent);
+  background: var(--panel-bg);
 }
 .remote-row:hover {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 60%, transparent), transparent 340px),
-    var(--panel-bg-muted);
+  background: var(--panel-bg-muted);
 }
 .remote-row.active {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 80%, transparent), transparent 420px),
-    var(--accent-row);
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--accent-row);
 }
 .entry-icon {
   position: relative;
@@ -356,8 +340,7 @@ watch(
 }
 .dir-icon {
   border-radius: 3px;
-  background: linear-gradient(180deg, #ffd37a, var(--folder));
-  box-shadow: inset 0 -2px 0 rgba(109, 67, 0, 0.18);
+  background: color-mix(in srgb, var(--folder) 78%, white);
 }
 .dir-icon::before {
   content: '';
@@ -372,9 +355,7 @@ watch(
 .file-icon {
   border: 1px solid color-mix(in srgb, var(--file) 46%, var(--border));
   border-radius: 3px;
-  background:
-    linear-gradient(135deg, transparent 0 72%, color-mix(in srgb, var(--file) 34%, transparent) 72%),
-    var(--file-soft);
+  background: var(--file-soft);
 }
 .file-icon::after {
   content: '';
@@ -410,11 +391,9 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 7px 12px;
   border-bottom: 1px solid var(--border);
-  background:
-    linear-gradient(90deg, var(--file-soft), transparent 280px),
-    var(--panel-bg-subtle);
+  background: var(--panel-bg-subtle);
   min-height: 32px;
 }
 .file-content {
@@ -426,9 +405,7 @@ watch(
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
-  background:
-    linear-gradient(90deg, rgba(127, 127, 127, 0.045) 1px, transparent 1px) 0 0 / 42px 42px,
-    var(--panel-bg);
+  background: var(--panel-bg);
   color: var(--text);
 }
 .empty-pane,

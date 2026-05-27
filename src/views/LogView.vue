@@ -1,15 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import {
-  NButton,
-  NEmpty,
-  NInput,
-  NInputNumber,
-  NScrollbar,
-  NSpin,
-  NTag,
-} from 'naive-ui'
 
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import EmptyState from '@/components/ui-local/EmptyState.vue'
+import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
 import DiffViewer from '../components/DiffViewer.vue'
 import { api } from '../api/svn'
 import { useErrorToast } from '../composables/use-error-toast'
@@ -91,18 +87,18 @@ function formatDate(d?: string | null) {
   }
 }
 
-function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'error' {
+function actionClass(a: string) {
   switch (a) {
     case 'A':
-      return 'success'
+      return 'status-added'
     case 'D':
-      return 'error'
+      return 'status-deleted'
     case 'M':
-      return 'info'
+      return 'status-modified'
     case 'R':
-      return 'warning'
+      return 'status-warning'
     default:
-      return 'default'
+      return ''
   }
 }
 </script>
@@ -111,25 +107,26 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
   <div class="log-view">
     <section class="left">
       <div class="toolbar">
-        <n-input v-model:value="search" placeholder="关键词" size="small" />
-        <n-input v-model:value="author" placeholder="作者" size="small" />
-        <n-input-number
-          v-model:value="limit"
-          :min="1"
-          :max="500"
-          size="small"
-          style="width: 100px"
+        <Input v-model="search" placeholder="关键词" class="h-8" />
+        <Input v-model="author" placeholder="作者" class="h-8" />
+        <Input
+          :model-value="limit"
+          type="number"
+          min="1"
+          max="500"
+          class="h-8 limit-input"
+          @update:model-value="(v) => (limit = Number(v) || 50)"
         />
-        <n-input v-model:value="revisionRange" placeholder="HEAD:1" size="small" />
-        <n-button size="small" @click="reload">刷新</n-button>
+        <Input v-model="revisionRange" placeholder="HEAD:1" class="h-8" />
+        <Button size="sm" variant="outline" @click="reload">刷新</Button>
       </div>
       <div class="toolbar secondary">
-        <n-input v-model:value="dateFrom" placeholder="开始日期 2026-01-01" size="small" />
-        <n-input v-model:value="dateTo" placeholder="结束日期 2026-05-07" size="small" />
+        <Input v-model="dateFrom" placeholder="开始日期 2026-01-01" class="h-8" />
+        <Input v-model="dateTo" placeholder="结束日期 2026-05-07" class="h-8" />
       </div>
-      <n-scrollbar class="list">
-        <n-spin v-if="loading" />
-        <n-empty v-else-if="entries.length === 0" description="暂无历史" size="small" />
+      <div class="list">
+        <LoadingSpinner v-if="loading" />
+        <EmptyState v-else-if="entries.length === 0" description="暂无历史" />
         <div
           v-for="e in entries"
           :key="e.revision"
@@ -137,18 +134,18 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
           @click="selectedRev = e.revision"
         >
           <div class="rev-head">
-            <n-tag size="small" type="info">r{{ e.revision }}</n-tag>
+            <Badge variant="secondary">r{{ e.revision }}</Badge>
             <span class="author mono">{{ e.author ?? '-' }}</span>
             <span class="date">{{ formatDate(e.date) }}</span>
           </div>
           <div class="msg">{{ (e.message ?? '').split('\n')[0] || '(无消息)' }}</div>
         </div>
-      </n-scrollbar>
+      </div>
     </section>
     <section class="right">
       <div v-if="selected" class="rev-detail">
         <div class="rev-meta">
-          <n-tag size="small" type="info">r{{ selected.revision }}</n-tag>
+          <Badge variant="secondary">r{{ selected.revision }}</Badge>
           <span class="author mono">{{ selected.author ?? '-' }}</span>
           <span class="date">{{ formatDate(selected.date) }}</span>
         </div>
@@ -156,7 +153,7 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
         <div class="rev-files">
           <div class="files-title">变更文件 ({{ selected.paths.length }})</div>
           <div v-for="p in selected.paths" :key="p.path" class="file-line mono">
-            <n-tag size="tiny" :type="actionColor(p.action)">{{ p.action }}</n-tag>
+            <Badge variant="outline" :class="actionClass(p.action)">{{ p.action }}</Badge>
             <span class="path">{{ p.path }}</span>
           </div>
         </div>
@@ -190,7 +187,7 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
 .toolbar {
   display: flex;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--toolbar-bg);
 }
@@ -200,9 +197,13 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
 .list {
   flex: 1;
   min-height: 0;
+  overflow: auto;
+}
+.limit-input {
+  width: 100px;
 }
 .rev-item {
-  padding: 8px 10px;
+  padding: 7px 10px;
   cursor: pointer;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--panel-bg);
@@ -212,7 +213,6 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
 }
 .rev-item.active {
   background: var(--accent-row);
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 .rev-head {
   display: flex;
@@ -243,7 +243,7 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
   min-height: 0;
 }
 .rev-detail {
-  padding: 10px 14px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--panel-bg-subtle);
   max-height: 40%;
@@ -274,6 +274,18 @@ function actionColor(a: string): 'default' | 'success' | 'info' | 'warning' | 'e
   align-items: center;
   font-size: 12px;
   padding: 1px 0;
+}
+.status-added {
+  color: var(--success);
+}
+.status-deleted {
+  color: var(--destructive);
+}
+.status-modified {
+  color: var(--accent);
+}
+.status-warning {
+  color: var(--warning);
 }
 .path {
   overflow: hidden;

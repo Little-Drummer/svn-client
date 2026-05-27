@@ -1,12 +1,11 @@
-import { useMessage } from 'naive-ui'
-
 import { describeError } from '../api/svn'
+import { useAppToast } from './use-app-toast'
 
 export function useErrorToast() {
-  const message = useMessage()
+  const toast = useAppToast()
   return (err: unknown, fallback = '操作失败') => {
     const text = describeError(err) || fallback
-    message.error(text, { duration: 6000, closable: true })
+    toast.error(fallback, text)
     console.error('[svn-client]', err)
   }
 }

@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import {
-  NButton,
-  NForm,
-  NFormItem,
-  NInput,
-  NModal,
-  NPopconfirm,
-  NTag,
-  useMessage,
-} from 'naive-ui'
 
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { useAppToast } from '@/composables/use-app-toast'
+import { confirm } from '@/composables/use-confirm-dialog'
 import { api, describeError } from '../api/svn'
 import { useRepositoriesStore } from '../stores/repositories'
 import type { RepositoryEntry } from '../types/svn'
@@ -21,7 +24,7 @@ const emit = defineEmits<{
 }>()
 
 const store = useRepositoriesStore()
-const message = useMessage()
+const toast = useAppToast()
 
 const showModal = ref(false)
 const editingId = ref<string | undefined>()
@@ -31,7 +34,7 @@ const username = ref('')
 const testing = ref(false)
 
 onMounted(() => {
-  store.reload().catch((e) => message.error(describeError(e)))
+  store.reload().catch((e) => toast.error('加载仓库失败', describeError(e)))
 })
 
 function openCreate() {
@@ -60,7 +63,7 @@ async function save() {
     })
     showModal.value = false
   } catch (e) {
-    message.error(describeError(e))
+    toast.error('保存失败', describeError(e))
   }
 }
 
@@ -75,20 +78,27 @@ async function test(repo?: RepositoryEntry) {
   testing.value = true
   try {
     const info = await api.testRepositoryConnection(target)
-    message.success(`连接成功：r${info.revision}`)
+    toast.success(`连接成功：r${info.revision}`)
     await store.reload()
   } catch (e) {
-    message.error(describeError(e))
+    toast.error('连接失败', describeError(e))
   } finally {
     testing.value = false
   }
 }
 
 async function remove(id: string) {
+  const ok = await confirm({
+    title: '删除仓库配置',
+    content: '删除这个仓库配置？本地工作副本不会受到影响。',
+    confirmText: '删除',
+    destructive: true,
+  })
+  if (!ok) return
   try {
     await store.remove(id)
   } catch (e) {
-    message.error(describeError(e))
+    toast.error('删除失败', describeError(e))
   }
 }
 </script>
@@ -97,7 +107,7 @@ async function remove(id: string) {
   <section class="repo-section">
     <div class="section-head">
       <span>远端仓库</span>
-      <n-button size="tiny" type="primary" @click="openCreate">添加</n-button>
+      <Button size="xs" @click="openCreate">添加</Button>
     </div>
     <div class="repo-scroll">
       <div v-if="store.items.length === 0" class="empty-text">暂无远端仓库</div>
@@ -111,44 +121,47 @@ async function remove(id: string) {
           <div class="repo-name">{{ repo.name }}</div>
           <div class="repo-url mono" :title="repo.url">{{ repo.url }}</div>
           <div class="repo-meta">
-            <n-tag v-if="repo.username" size="tiny">{{ repo.username }}</n-tag>
+            <Badge v-if="repo.username" variant="outline">{{ repo.username }}</Badge>
             <span v-if="repo.lastAccessedAt">最近连接 {{ new Date(repo.lastAccessedAt).toLocaleDateString() }}</span>
           </div>
         </div>
         <div class="repo-actions" @click.stop>
-          <n-button size="tiny" tertiary :loading="testing" @click="test(repo)">测试</n-button>
-          <n-button size="tiny" tertiary type="primary" @click="emit('browse', repo)">浏览</n-button>
-          <n-button size="tiny" tertiary @click="emit('checkout', repo)">检出</n-button>
-          <n-button size="tiny" tertiary @click="openEdit(repo)">编辑</n-button>
-          <n-popconfirm @positive-click="remove(repo.id)">
-            <template #trigger>
-              <n-button size="tiny" tertiary type="error">删除</n-button>
-            </template>
-            删除这个仓库配置？
-          </n-popconfirm>
+          <Button size="xs" variant="ghost" :disabled="testing" @click="test(repo)">测试</Button>
+          <Button size="xs" variant="ghost" @click="emit('browse', repo)">浏览</Button>
+          <Button size="xs" variant="ghost" @click="emit('checkout', repo)">检出</Button>
+          <Button size="xs" variant="ghost" @click="openEdit(repo)">编辑</Button>
+          <Button size="xs" variant="ghost" class="danger-action" @click="remove(repo.id)">删除</Button>
         </div>
       </div>
     </div>
 
-    <n-modal v-model:show="showModal" preset="card" title="远端仓库" class="repo-modal">
-      <n-form label-placement="left" label-width="80" size="small">
-        <n-form-item label="名称" required>
-          <n-input v-model:value="name" placeholder="项目名或仓库别名" />
-        </n-form-item>
-        <n-form-item label="URL" required>
-          <n-input v-model:value="url" placeholder="https://example.com/svn/repo/trunk" />
-        </n-form-item>
-        <n-form-item label="用户名">
-          <n-input v-model:value="username" placeholder="可选" />
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <div class="modal-actions">
-          <n-button :loading="testing" @click="test()">连接测试</n-button>
-          <n-button type="primary" @click="save">保存</n-button>
+    <Dialog v-model:open="showModal">
+      <DialogContent class="repo-modal">
+        <DialogHeader>
+          <DialogTitle>远端仓库</DialogTitle>
+        </DialogHeader>
+        <div class="repo-form">
+          <div class="form-row">
+            <Label for="repo-name">名称</Label>
+            <Input id="repo-name" v-model="name" placeholder="项目名或仓库别名" />
+          </div>
+          <div class="form-row">
+            <Label for="repo-url">URL</Label>
+            <Input id="repo-url" v-model="url" placeholder="https://example.com/svn/repo/trunk" />
+          </div>
+          <div class="form-row">
+            <Label for="repo-username">用户名</Label>
+            <Input id="repo-username" v-model="username" placeholder="可选" />
+          </div>
         </div>
-      </template>
-    </n-modal>
+        <DialogFooter>
+        <div class="modal-actions">
+          <Button variant="outline" :disabled="testing" @click="test()">连接测试</Button>
+          <Button @click="save">保存</Button>
+        </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 
@@ -161,16 +174,15 @@ async function remove(id: string) {
   max-height: 42%;
   overflow: hidden;
   border-bottom: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 34%, transparent), transparent 180px),
-    var(--sidebar-bg);
+  background: var(--sidebar-bg);
 }
 .section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 10px 8px;
-  font-size: 13px;
+  min-height: 36px;
+  padding: 8px 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-strong);
 }
@@ -189,21 +201,16 @@ async function remove(id: string) {
   color: var(--text-muted);
 }
 .repo-item {
-  margin: 0 8px 8px;
-  padding: 9px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 80%, transparent), transparent),
-    var(--panel-bg);
-  box-shadow: var(--shadow-sm);
+  margin: 0 6px 4px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
   cursor: pointer;
 }
 .repo-item:hover {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 70%, transparent), transparent 260px),
-    var(--panel-bg-subtle);
+  border-color: var(--border-subtle);
+  background: var(--panel-bg-subtle);
 }
 .repo-main {
   cursor: pointer;
@@ -211,7 +218,7 @@ async function remove(id: string) {
 .repo-name {
   color: var(--text-strong);
   font-weight: 500;
-  font-size: 13px;
+  font-size: 12px;
 }
 .repo-url {
   margin-top: 2px;
@@ -238,10 +245,30 @@ async function remove(id: string) {
 }
 .repo-modal {
   width: min(560px, calc(100vw - 32px));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+  backdrop-filter: blur(26px) saturate(150%);
+}
+.repo-form {
+  display: grid;
+  gap: 12px;
+}
+.form-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.form-row label {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+.danger-action {
+  color: var(--destructive);
 }
 </style>

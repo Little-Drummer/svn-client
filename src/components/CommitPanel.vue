@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NEmpty, NInput, useDialog } from 'naive-ui'
 
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
+import EmptyState from '@/components/ui-local/EmptyState.vue'
+import { confirm } from '@/composables/use-confirm-dialog'
 import TaskOutput from './TaskOutput.vue'
 import { api } from '../api/svn'
 import { useTasksStore } from '../stores/tasks'
@@ -14,7 +17,6 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ done: [] }>()
 
-const dialog = useDialog()
 const tasksStore = useTasksStore()
 const toast = useErrorToast()
 
@@ -47,25 +49,23 @@ const canCommit = computed(
 async function submit() {
   if (!canCommit.value) return
   const paths = [...props.checkedPaths]
-  dialog.warning({
+  const ok = await confirm({
     title: '确认提交',
     content: `将提交 ${paths.length} 个文件到 ${props.workingCopy.url ?? props.workingCopy.path}`,
-    positiveText: '提交',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        const id = await api.startCommit(paths, message.value.trim())
-        tasksStore.register({
-          taskId: id,
-          kind: 'commit',
-          title: `提交 ${paths.length} 个文件`,
-        })
-        taskId.value = id
-      } catch (e) {
-        toast(e, '启动提交失败')
-      }
-    },
+    confirmText: '提交',
   })
+  if (!ok) return
+  try {
+    const id = await api.startCommit(paths, message.value.trim())
+    tasksStore.register({
+      taskId: id,
+      kind: 'commit',
+      title: `提交 ${paths.length} 个文件`,
+    })
+    taskId.value = id
+  } catch (e) {
+    toast(e, '启动提交失败')
+  }
 }
 
 watch(
@@ -87,30 +87,27 @@ watch(
   <div class="commit-panel">
     <div class="summary">
       <template v-if="checkedPaths.length === 0">
-        <n-empty description="勾选左侧文件后再提交" size="small" />
+        <EmptyState description="勾选左侧文件后再提交" />
       </template>
       <template v-else>
         <div class="hint">已勾选 {{ checkedPaths.length }} 个文件</div>
       </template>
     </div>
 
-    <n-input
-      v-model:value="message"
-      type="textarea"
+    <Textarea
+      v-model="message"
       placeholder="提交说明（必填）"
-      :autosize="{ minRows: 4, maxRows: 8 }"
       :disabled="submitting"
+      class="commit-message"
     />
 
     <div class="actions">
-      <n-button
-        type="primary"
+      <Button
         :disabled="!canCommit"
-        :loading="submitting"
         @click="submit"
       >
-        提交
-      </n-button>
+        {{ submitting ? '提交中' : '提交' }}
+      </Button>
     </div>
 
     <TaskOutput :task-id="taskId" />
@@ -132,6 +129,10 @@ watch(
 }
 .hint {
   color: var(--text-muted);
+}
+.commit-message {
+  min-height: 116px;
+  resize: vertical;
 }
 .actions {
   display: flex;

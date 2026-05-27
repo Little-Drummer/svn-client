@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { NTabs, NTabPane, NButton, NTag, NTooltip, useMessage } from 'naive-ui'
 
 import WorkingCopyList from '../components/WorkingCopyList.vue'
 import RepositoryList from '../components/RepositoryList.vue'
@@ -10,13 +9,18 @@ import CheckoutView from '../views/CheckoutView.vue'
 import RemoteBrowserView from '../views/RemoteBrowserView.vue'
 import EnvWarning from '../components/EnvWarning.vue'
 
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { useAppToast } from '@/composables/use-app-toast'
 import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { api, describeError } from '../api/svn'
 import type { RepositoryEntry } from '../types/svn'
 
 const wcStore = useWorkingCopiesStore()
 const tab = ref<'status' | 'log' | 'remote' | 'checkout'>('status')
-const message = useMessage()
+const toast = useAppToast()
 
 const svnVersion = ref<string | null>(null)
 const svnError = ref<string | null>(null)
@@ -53,9 +57,9 @@ async function refreshSelected() {
   if (!selected.value) return
   try {
     await wcStore.refresh(selected.value.id)
-    message.success('已刷新')
+    toast.success('已刷新')
   } catch (e) {
-    message.error(describeError(e))
+    toast.error('刷新失败', describeError(e))
   }
 }
 
@@ -83,39 +87,47 @@ function browseRepository(repo: RepositoryEntry) {
             {{ selected.path }}
           </span>
           <span v-else class="empty">未选择工作副本</span>
-          <n-tag v-if="selected?.revision" size="small" type="info">r{{ selected.revision }}</n-tag>
+          <Badge v-if="selected?.revision" variant="secondary">r{{ selected.revision }}</Badge>
         </div>
         <div class="actions">
-          <n-button v-if="selected" size="small" @click="refreshSelected">刷新信息</n-button>
+          <Button v-if="selected" size="sm" variant="outline" @click="refreshSelected">刷新信息</Button>
         </div>
       </header>
 
       <EnvWarning v-if="svnError" :message="svnError" @retry="detectSvn" />
 
-      <n-tabs v-model:value="tab" type="line" class="tabs" pane-class="tab-pane">
-        <n-tab-pane name="status" tab="状态 / 提交">
+      <Tabs v-model="tab" class="tabs">
+        <TabsList class="tabs-nav">
+          <TabsTrigger value="status">状态 / 提交</TabsTrigger>
+          <TabsTrigger value="log">历史</TabsTrigger>
+          <TabsTrigger value="remote">远端浏览</TabsTrigger>
+          <TabsTrigger value="checkout">检出</TabsTrigger>
+        </TabsList>
+        <TabsContent value="status" class="tab-pane">
           <StatusView v-if="selected" :working-copy="selected" />
           <div v-else class="empty-pane">先在左侧添加并选择一个工作副本</div>
-        </n-tab-pane>
-        <n-tab-pane name="log" tab="历史">
+        </TabsContent>
+        <TabsContent value="log" class="tab-pane">
           <LogView v-if="selected" :working-copy="selected" />
           <div v-else class="empty-pane">先在左侧添加并选择一个工作副本</div>
-        </n-tab-pane>
-        <n-tab-pane name="remote" tab="远端浏览">
+        </TabsContent>
+        <TabsContent value="remote" class="tab-pane">
           <RemoteBrowserView :repository="browseRepo" @checkout="checkoutRepository" />
-        </n-tab-pane>
-        <n-tab-pane name="checkout" tab="检出">
+        </TabsContent>
+        <TabsContent value="checkout" class="tab-pane">
           <CheckoutView :repository="checkoutRepo" />
-        </n-tab-pane>
-      </n-tabs>
+        </TabsContent>
+      </Tabs>
 
       <footer class="statusbar mono">
-        <n-tooltip v-if="svnVersion">
-          <template #trigger>
+        <TooltipProvider v-if="svnVersion">
+          <Tooltip>
+            <TooltipTrigger as-child>
             <span>svn ✓ {{ svnVersion.split(/\s+/)[0] || svnVersion }}</span>
-          </template>
-          {{ svnVersion }}
-        </n-tooltip>
+            </TooltipTrigger>
+            <TooltipContent>{{ svnVersion }}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <span v-else-if="svnError" class="err">svn 不可用</span>
         <span v-else>检测 svn 中...</span>
       </footer>
@@ -126,12 +138,10 @@ function browseRepository(repo: RepositoryEntry) {
 <style scoped>
 .layout {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 292px 1fr;
   height: 100vh;
   width: 100vw;
-  background:
-    radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--accent-soft) 44%, transparent), transparent 360px),
-    var(--app-bg);
+  background: var(--app-bg);
   color: var(--text);
 }
 .sidebar {
@@ -147,17 +157,16 @@ function browseRepository(repo: RepositoryEntry) {
   height: 100%;
   min-width: 0;
   background: var(--panel-bg);
+  backdrop-filter: blur(28px) saturate(145%);
 }
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
+  min-height: 44px;
+  padding: 7px 12px;
   border-bottom: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent),
-    var(--toolbar-bg);
-  backdrop-filter: blur(12px);
+  background: var(--toolbar-bg);
+  backdrop-filter: blur(26px) saturate(150%);
   gap: 12px;
 }
 .title {
@@ -165,11 +174,12 @@ function browseRepository(repo: RepositoryEntry) {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 .path {
   color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -184,24 +194,23 @@ function browseRepository(repo: RepositoryEntry) {
   display: flex;
   flex-direction: column;
 }
-.tabs :deep(.n-tabs-nav) {
-  padding: 0 14px;
-  background: var(--panel-bg);
+.tabs-nav {
+  width: 100%;
+  justify-content: flex-start;
+  height: 38px;
+  padding: 4px 12px;
+  border-radius: 0;
+  background: var(--panel-bg-subtle);
   border-bottom: 1px solid var(--border-subtle);
 }
-.tabs :deep(.n-tabs-tab) {
-  padding: 10px 0;
-}
-.tabs :deep(.n-tab-pane) {
-  height: 100%;
-  padding: 0;
-}
-.tabs :deep(.n-tabs-pane-wrapper) {
+.tab-pane {
   flex: 1;
-  min-height: 0;
-}
-.tabs :deep(.tab-pane) {
   height: 100%;
+  min-height: 0;
+  margin: 0;
+}
+.tab-pane[data-state='inactive'] {
+  display: none;
 }
 .empty-pane {
   padding: 32px;
@@ -210,7 +219,8 @@ function browseRepository(repo: RepositoryEntry) {
 }
 .statusbar {
   border-top: 1px solid var(--border);
-  padding: 5px 14px;
+  min-height: 24px;
+  padding: 4px 12px;
   font-size: 12px;
   color: var(--text-muted);
   background: var(--panel-bg-muted);

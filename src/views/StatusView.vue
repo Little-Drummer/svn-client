@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import {
-  NButton,
-  NCheckbox,
-  NEmpty,
-  NInput,
-  NModal,
-  NScrollbar,
-  NSpin,
-  NSwitch,
-  NTag,
-  useDialog,
-} from 'naive-ui'
 
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
+import EmptyState from '@/components/ui-local/EmptyState.vue'
+import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
+import { confirm } from '@/composables/use-confirm-dialog'
 import DiffViewer from '../components/DiffViewer.vue'
 import CommitPanel from '../components/CommitPanel.vue'
 import UpdatePanel from '../components/UpdatePanel.vue'
@@ -26,7 +29,6 @@ const props = defineProps<{ workingCopy: WorkingCopyEntry }>()
 
 const statusStore = useStatusStore()
 const toast = useErrorToast()
-const dialog = useDialog()
 
 const selectedFile = ref<SvnStatusEntry | null>(null)
 const checkedPaths = ref<Set<string>>(new Set())
@@ -72,19 +74,19 @@ const STATUS_LABEL: Record<string, string> = {
   incomplete: '未完成',
   normal: '正常',
 }
-const STATUS_COLORS: Record<string, 'default' | 'success' | 'info' | 'warning' | 'error'> = {
-  modified: 'info',
-  added: 'success',
-  deleted: 'error',
-  replaced: 'warning',
-  conflicted: 'error',
-  missing: 'warning',
-  obstructed: 'warning',
-  unversioned: 'default',
-  ignored: 'default',
-  external: 'default',
-  incomplete: 'warning',
-  normal: 'default',
+const STATUS_CLASSES: Record<string, string> = {
+  modified: 'status-modified',
+  added: 'status-added',
+  deleted: 'status-deleted',
+  replaced: 'status-warning',
+  conflicted: 'status-deleted',
+  missing: 'status-warning',
+  obstructed: 'status-warning',
+  unversioned: 'status-muted',
+  ignored: 'status-muted',
+  external: 'status-muted',
+  incomplete: 'status-warning',
+  normal: 'status-muted',
 }
 
 const grouped = computed(() => {
@@ -97,7 +99,7 @@ const grouped = computed(() => {
   return STATUS_ORDER.filter((s) => map.has(s)).map((s) => ({
     item: s,
     label: STATUS_LABEL[s] ?? s,
-    color: STATUS_COLORS[s] ?? 'default',
+    className: STATUS_CLASSES[s] ?? 'status-muted',
     entries: map.get(s)!.sort((a, b) => a.path.localeCompare(b.path)),
   }))
 })
@@ -247,8 +249,8 @@ function fileStatusLabel(path: string) {
   return item === 'normal' ? '' : (STATUS_LABEL[item] ?? item)
 }
 
-function fileStatusColor(path: string): 'default' | 'success' | 'info' | 'warning' | 'error' {
-  return STATUS_COLORS[fileStatus(path)] ?? 'default'
+function fileStatusClass(path: string) {
+  return STATUS_CLASSES[fileStatus(path)] ?? 'status-muted'
 }
 
 function toggleDir(entry: WorkingCopyFileEntry) {
@@ -314,20 +316,19 @@ async function createFolder() {
 async function revertSelected() {
   if (checkedPaths.value.size === 0) return
   const paths = [...checkedPaths.value]
-  dialog.warning({
+  const ok = await confirm({
     title: '撤销本地修改',
     content: `这些文件将恢复到 BASE 版本，本地未提交的修改会丢失：\n${paths.join('\n')}`,
-    positiveText: '确认撤销',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        await api.revert(paths)
-        await reload()
-      } catch (e) {
-        toast(e, '撤销失败')
-      }
-    },
+    confirmText: '确认撤销',
+    destructive: true,
   })
+  if (!ok) return
+  try {
+    await api.revert(paths)
+    await reload()
+  } catch (e) {
+    toast(e, '撤销失败')
+  }
 }
 
 async function addSelected() {
@@ -347,20 +348,19 @@ async function addSelected() {
 async function deleteSelected() {
   if (checkedPaths.value.size === 0) return
   const paths = [...checkedPaths.value]
-  dialog.warning({
+  const ok = await confirm({
     title: '删除文件',
     content: `这些文件会被 svn delete 标记，未跟踪文件会从磁盘删除：\n${paths.join('\n')}`,
-    positiveText: '确认删除',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        await api.delete(paths)
-        await reload()
-      } catch (e) {
-        toast(e, '删除失败')
-      }
-    },
+    confirmText: '确认删除',
+    destructive: true,
   })
+  if (!ok) return
+  try {
+    await api.delete(paths)
+    await reload()
+  } catch (e) {
+    toast(e, '删除失败')
+  }
 }
 
 async function ignoreSelected() {
@@ -384,53 +384,49 @@ async function ignoreSelected() {
     <section class="file-list">
       <div class="list-toolbar">
         <div class="mode-switch">
-          <n-button
-            size="tiny"
-            :type="leftMode === 'tree' ? 'primary' : 'tertiary'"
+          <Button
+            size="xs"
+            :variant="leftMode === 'tree' ? 'secondary' : 'ghost'"
             @click="leftMode = 'tree'"
           >
             文件
-          </n-button>
-          <n-button
-            size="tiny"
-            :type="leftMode === 'changes' ? 'primary' : 'tertiary'"
+          </Button>
+          <Button
+            size="xs"
+            :variant="leftMode === 'changes' ? 'secondary' : 'ghost'"
             @click="leftMode = 'changes'"
           >
             变更
-          </n-button>
+          </Button>
         </div>
         <span class="spacer" />
-        <n-button
+        <Button
           v-if="leftMode === 'tree'"
-          size="tiny"
-          tertiary
-          type="primary"
+          size="xs"
+          variant="ghost"
           @click="showCreateFolder = true"
         >
           新建文件夹
-        </n-button>
-        <n-checkbox
+        </Button>
+        <label
           v-if="leftMode === 'changes'"
-          :checked="allChecked"
-          :indeterminate="!allChecked && [...checkedPaths].length > 0"
-          @update:checked="(v: boolean) => toggleAll(v)"
+          class="inline-check"
         >
+          <Checkbox
+            :model-value="allChecked ? true : ([...checkedPaths].length > 0 ? 'indeterminate' : false)"
+            @update:model-value="(v) => toggleAll(v === true)"
+          />
           全选
-        </n-checkbox>
-        <n-switch
-          v-model:value="statusStore.showUnversioned"
-          size="small"
-          @update:value="reload"
-        />
+        </label>
+        <Switch v-model="statusStore.showUnversioned" @update:model-value="reload" />
         <span class="hint">显示未跟踪</span>
-        <n-button size="tiny" tertiary @click="reload">刷新</n-button>
+        <Button size="xs" variant="ghost" @click="reload">刷新</Button>
       </div>
       <div v-if="leftMode === 'tree'" class="tree-scroll">
-        <n-spin v-if="fileTreeLoading" />
-        <n-empty
+        <LoadingSpinner v-if="fileTreeLoading" />
+        <EmptyState
           v-else-if="flatFileTree.length === 0"
           description="工作副本目录为空"
-          size="small"
         />
         <div
           v-for="row in flatFileTree"
@@ -446,32 +442,31 @@ async function ignoreSelected() {
           />
           <span v-else class="tree-caret placeholder" />
           <span :class="['tree-icon', row.entry.kind === 'dir' ? 'dir-icon' : 'file-icon']" />
-          <n-checkbox
+          <Checkbox
             :disabled="!statusByPath.has(row.entry.path) || ['normal', 'ignored', 'external'].includes(fileStatus(row.entry.path))"
-            :checked="checkedPaths.has(row.entry.path)"
-            @update:checked="(v: boolean) => toggleTreeCheck(row.entry, v)"
+            :model-value="checkedPaths.has(row.entry.path)"
+            @update:model-value="(v) => toggleTreeCheck(row.entry, v === true)"
             @click.stop
           />
           <span class="file-path mono" :title="row.entry.path">{{ row.entry.name }}</span>
-          <n-tag
+          <Badge
             v-if="fileStatusLabel(row.entry.path)"
-            size="tiny"
-            :type="fileStatusColor(row.entry.path)"
+            variant="outline"
+            :class="fileStatusClass(row.entry.path)"
           >
             {{ fileStatusLabel(row.entry.path) }}
-          </n-tag>
+          </Badge>
         </div>
       </div>
-      <n-scrollbar v-else class="list-scroll">
-        <n-spin v-if="statusStore.loading" />
-        <n-empty
+      <div v-else class="list-scroll">
+        <LoadingSpinner v-if="statusStore.loading" />
+        <EmptyState
           v-else-if="grouped.length === 0"
           description="工作区干净，没有变更"
-          size="small"
         />
         <div v-for="group in grouped" :key="group.item" class="group">
           <div class="group-header">
-            <n-tag size="small" :type="group.color">{{ group.label }}</n-tag>
+            <Badge variant="outline" :class="group.className">{{ group.label }}</Badge>
             <span class="group-count mono">{{ group.entries.length }}</span>
           </div>
           <div
@@ -480,16 +475,16 @@ async function ignoreSelected() {
             :class="['file-row', { active: selectedFile?.path === e.path }]"
             @click="selectedFile = e"
           >
-            <n-checkbox
+            <Checkbox
               :disabled="e.item === 'normal' || e.item === 'ignored' || e.item === 'external'"
-              :checked="checkedPaths.has(e.path)"
-              @update:checked="(v: boolean) => toggleEntry(e, v)"
+              :model-value="checkedPaths.has(e.path)"
+              @update:model-value="(v) => toggleEntry(e, v === true)"
               @click.stop
             />
             <span class="file-path mono" :title="e.path">{{ shortName(e.path) }}</span>
           </div>
         </div>
-      </n-scrollbar>
+      </div>
     </section>
 
     <!-- 中：diff -->
@@ -506,56 +501,56 @@ async function ignoreSelected() {
     <!-- 右：commit/update 面板 -->
     <section class="side-pane">
       <div class="side-tabs">
-        <n-button
-          size="small"
-          :type="!showUpdate ? 'primary' : 'tertiary'"
+        <Button
+          size="sm"
+          :variant="!showUpdate ? 'secondary' : 'ghost'"
           @click="showUpdate = false"
         >
           提交
-        </n-button>
-        <n-button
-          size="small"
-          :type="showUpdate ? 'primary' : 'tertiary'"
+        </Button>
+        <Button
+          size="sm"
+          :variant="showUpdate ? 'secondary' : 'ghost'"
           @click="showUpdate = true"
         >
           更新
-        </n-button>
+        </Button>
         <span class="spacer" />
-        <n-button
-          size="small"
-          tertiary
-          type="success"
+        <Button
+          size="sm"
+          variant="ghost"
+          class="success-action"
           :disabled="[...checkedPaths].every((path) => statusStore.entries.find((e) => e.path === path)?.item !== 'unversioned')"
           @click="addSelected"
         >
           Add
-        </n-button>
-        <n-button
-          size="small"
-          tertiary
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
           :disabled="[...checkedPaths].every((path) => statusStore.entries.find((e) => e.path === path)?.item !== 'unversioned')"
           @click="ignoreSelected"
         >
           忽略
-        </n-button>
-        <n-button
-          size="small"
-          tertiary
-          type="error"
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          class="danger-action"
           :disabled="checkedPaths.size === 0"
           @click="deleteSelected"
         >
           删除
-        </n-button>
-        <n-button
-          size="small"
-          tertiary
-          type="warning"
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          class="warning-action"
           :disabled="checkedPaths.size === 0"
           @click="revertSelected"
         >
           撤销
-        </n-button>
+        </Button>
       </div>
       <CommitPanel
         v-if="!showUpdate"
@@ -571,26 +566,31 @@ async function ignoreSelected() {
       />
     </section>
 
-    <n-modal v-model:show="showCreateFolder" preset="card" title="新建文件夹" class="folder-modal">
-      <div class="folder-form">
-        <div class="folder-parent mono" :title="createFolderParentPath()">
-          {{ createFolderParentPath() }}
+    <Dialog v-model:open="showCreateFolder">
+      <DialogContent class="folder-modal">
+        <DialogHeader>
+          <DialogTitle>新建文件夹</DialogTitle>
+        </DialogHeader>
+        <div class="folder-form">
+          <div class="folder-parent mono" :title="createFolderParentPath()">
+            {{ createFolderParentPath() }}
+          </div>
+          <Input
+            v-model="folderName"
+            placeholder="文件夹名称"
+            @keyup.enter="createFolder"
+          />
         </div>
-        <n-input
-          v-model:value="folderName"
-          placeholder="文件夹名称"
-          @keyup.enter="createFolder"
-        />
-      </div>
-      <template #footer>
-        <div class="folder-actions">
-          <n-button @click="showCreateFolder = false">取消</n-button>
-          <n-button type="primary" :disabled="!folderName.trim()" @click="createFolder">
+        <DialogFooter>
+          <div class="folder-actions">
+          <Button variant="outline" @click="showCreateFolder = false">取消</Button>
+          <Button :disabled="!folderName.trim()" @click="createFolder">
             创建
-          </n-button>
-        </div>
-      </template>
-    </n-modal>
+          </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -622,8 +622,8 @@ async function ignoreSelected() {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 40px;
-  padding: 6px 10px;
+  min-height: 38px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--toolbar-bg);
   font-size: 12px;
@@ -634,6 +634,7 @@ async function ignoreSelected() {
 .list-scroll {
   flex: 1;
   min-height: 0;
+  overflow: auto;
 }
 .tree-scroll {
   flex: 1;
@@ -642,13 +643,25 @@ async function ignoreSelected() {
 }
 .mode-switch {
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg-muted);
+}
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+  user-select: none;
 }
 .group-header {
   display: flex;
   gap: 6px;
   align-items: center;
-  padding: 7px 10px 5px;
+  padding: 6px 10px 4px;
   background: var(--panel-bg-muted);
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -660,7 +673,7 @@ async function ignoreSelected() {
   display: flex;
   gap: 6px;
   align-items: center;
-  min-height: 30px;
+  min-height: 28px;
   padding: 3px 10px 3px 12px;
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
@@ -671,7 +684,7 @@ async function ignoreSelected() {
   grid-template-columns: 12px 16px 22px minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
-  min-height: 30px;
+  min-height: 28px;
   padding: 3px 10px;
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
@@ -679,15 +692,10 @@ async function ignoreSelected() {
   font-size: 12px;
 }
 .tree-row:hover {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 54%, transparent), transparent 280px),
-    var(--panel-bg-muted);
+  background: var(--panel-bg-muted);
 }
 .tree-row.active {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 74%, transparent), transparent 320px),
-    var(--accent-row);
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--accent-row);
 }
 .tree-caret {
   width: 0;
@@ -710,8 +718,7 @@ async function ignoreSelected() {
 }
 .dir-icon {
   border-radius: 3px;
-  background: linear-gradient(180deg, #ffd37a, var(--folder));
-  box-shadow: inset 0 -2px 0 rgba(109, 67, 0, 0.18);
+  background: color-mix(in srgb, var(--folder) 78%, white);
 }
 .dir-icon::before {
   content: '';
@@ -726,9 +733,7 @@ async function ignoreSelected() {
 .file-icon {
   border: 1px solid color-mix(in srgb, var(--file) 46%, var(--border));
   border-radius: 3px;
-  background:
-    linear-gradient(135deg, transparent 0 72%, color-mix(in srgb, var(--file) 34%, transparent) 72%),
-    var(--file-soft);
+  background: var(--file-soft);
 }
 .file-icon::after {
   content: '';
@@ -746,7 +751,6 @@ async function ignoreSelected() {
 }
 .file-row.active {
   background: var(--accent-row);
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 .file-path {
   flex: 1;
@@ -759,8 +763,8 @@ async function ignoreSelected() {
 .side-tabs {
   display: flex;
   gap: 6px;
-  min-height: 40px;
-  padding: 6px 10px;
+  min-height: 38px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--toolbar-bg);
   align-items: center;
@@ -771,6 +775,10 @@ async function ignoreSelected() {
 }
 .folder-modal {
   width: min(520px, calc(100vw - 32px));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(26px) saturate(150%);
 }
 .folder-form {
   display: flex;
@@ -792,5 +800,23 @@ async function ignoreSelected() {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+.status-added,
+.success-action {
+  color: var(--success);
+}
+.status-deleted,
+.danger-action {
+  color: var(--destructive);
+}
+.status-modified {
+  color: var(--accent);
+}
+.status-warning,
+.warning-action {
+  color: var(--warning);
+}
+.status-muted {
+  color: var(--text-muted);
 }
 </style>

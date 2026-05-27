@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NScrollbar, NTag } from 'naive-ui'
 
+import { Badge } from '@/components/ui/badge'
 import { useTasksStore, type RunningTask } from '../stores/tasks'
 
 const props = defineProps<{ taskId: string | null }>()
@@ -15,15 +15,15 @@ const task = computed<RunningTask | null>(() =>
 <template>
   <div v-if="task" class="task-output">
     <div class="task-header">
-      <n-tag
-        size="small"
-        :type="task.finished ? (task.success ? 'success' : 'error') : 'info'"
+      <Badge
+        :variant="task.finished ? (task.success ? 'secondary' : 'destructive') : 'outline'"
+        :class="['task-badge', task.finished ? (task.success ? 'success' : 'error') : 'running']"
       >
         {{ task.finished ? (task.success ? '成功' : '失败') : '运行中' }}
-      </n-tag>
+      </Badge>
       <span class="title">{{ task.title }}</span>
     </div>
-    <n-scrollbar class="log mono">
+    <div class="log mono">
       <div
         v-for="(l, i) in task.lines"
         :key="i"
@@ -31,7 +31,7 @@ const task = computed<RunningTask | null>(() =>
       >
         {{ l.text }}
       </div>
-    </n-scrollbar>
+    </div>
   </div>
 </template>
 
@@ -63,8 +63,18 @@ const task = computed<RunningTask | null>(() =>
 .log {
   flex: 1;
   min-height: 0;
+  overflow: auto;
   font-size: 11px;
   background: var(--panel-bg-muted);
+}
+.task-badge {
+  height: 20px;
+}
+.task-badge.success {
+  color: var(--success);
+}
+.task-badge.running {
+  color: var(--accent);
 }
 .line {
   padding: 1px 10px;

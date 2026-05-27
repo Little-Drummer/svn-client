@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { open } from '@tauri-apps/plugin-dialog'
-import { NButton, NEmpty, NPopconfirm, NTooltip } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import EmptyState from '@/components/ui-local/EmptyState.vue'
+import { confirm } from '@/composables/use-confirm-dialog'
 import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useErrorToast } from '../composables/use-error-toast'
 
@@ -45,6 +48,13 @@ async function refresh(id: string) {
 }
 
 async function remove(id: string) {
+  const ok = await confirm({
+    title: '移除工作副本',
+    content: '移除这个工作副本？只是从列表里去掉，不会删除磁盘文件。',
+    confirmText: '移除',
+    destructive: true,
+  })
+  if (!ok) return
   try {
     await store.remove(id)
   } catch (e) {
@@ -78,11 +88,11 @@ function toggleRoot(root: string) {
 <template>
   <div class="wc-list">
     <div class="wc-toolbar">
-      <n-button size="small" type="primary" @click="pickAndAdd">添加工作副本</n-button>
+      <Button size="sm" @click="pickAndAdd">添加工作副本</Button>
     </div>
     <div class="wc-scroll">
       <div v-if="items.length === 0" class="wc-empty">
-        <n-empty description="还没有工作副本，点上面按钮选一个本地目录" size="small" />
+        <EmptyState description="还没有工作副本，点上面按钮选一个本地目录" />
       </div>
       <div v-for="group in groups" :key="group.root" class="wc-group">
         <button class="root-row" type="button" @click="toggleRoot(group.root)">
@@ -107,18 +117,17 @@ function toggleRoot(root: string) {
               <span v-if="wc.url" class="wc-url" :title="wc.url">{{ wc.url }}</span>
             </div>
             <div class="wc-actions" @click.stop>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button size="tiny" tertiary @click="refresh(wc.id)">刷新</n-button>
-                </template>
-                重新读取 svn info
-              </n-tooltip>
-              <n-popconfirm @positive-click="remove(wc.id)">
-                <template #trigger>
-                  <n-button size="tiny" tertiary type="error">移除</n-button>
-                </template>
-                移除这个工作副本？只是从列表里去掉，不会删除磁盘文件。
-              </n-popconfirm>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Button size="xs" variant="ghost" @click="refresh(wc.id)">刷新</Button>
+                  </TooltipTrigger>
+                  <TooltipContent>重新读取 svn info</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <Button size="xs" variant="ghost" class="danger-action" @click="remove(wc.id)">
+                移除
+              </Button>
             </div>
           </div>
         </div>
@@ -135,46 +144,42 @@ function toggleRoot(root: string) {
   background: var(--sidebar-bg);
 }
 .wc-toolbar {
-  padding: 10px;
+  min-height: 38px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--border);
+  background: var(--toolbar-bg);
 }
 .wc-scroll {
   flex: 1;
   height: 0;
   min-height: 0;
   overflow: auto;
-  padding: 8px 0;
+  padding: 6px 0;
 }
 .wc-empty {
   padding: 24px 12px;
   text-align: center;
 }
 .wc-item {
-  margin: 6px 8px 8px 24px;
-  padding: 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 80%, transparent), transparent),
-    var(--panel-bg);
-  box-shadow: var(--shadow-sm);
+  margin: 3px 6px 3px 22px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
   cursor: pointer;
 }
 .wc-item.active {
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 82%, transparent), transparent 260px),
-    var(--panel-bg);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--accent-row);
 }
 .wc-item:hover {
-  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 58%, transparent), transparent 260px),
-    var(--panel-bg-subtle);
+  border-color: var(--border-subtle);
+  background: var(--panel-bg-subtle);
 }
 .wc-name {
   color: var(--text-strong);
   font-weight: 500;
+  font-size: 12px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -183,7 +188,7 @@ function toggleRoot(root: string) {
   white-space: nowrap;
 }
 .wc-meta {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   display: flex;
   gap: 6px;
@@ -200,13 +205,16 @@ function toggleRoot(root: string) {
   gap: 6px;
   margin-top: 6px;
 }
+.danger-action {
+  color: var(--destructive);
+}
 .wc-group {
   margin-bottom: 6px;
 }
 .root-row {
-  width: calc(100% - 16px);
-  margin: 0 8px 4px;
-  min-height: 30px;
+  width: calc(100% - 12px);
+  margin: 0 6px 2px;
+  min-height: 28px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -221,7 +229,7 @@ function toggleRoot(root: string) {
   padding: 4px 6px;
 }
 .root-row:hover {
-  background: var(--accent-soft);
+  background: var(--panel-bg-subtle);
 }
 .chevron {
   width: 0;
@@ -239,17 +247,17 @@ function toggleRoot(root: string) {
   flex: none;
 }
 .root-icon {
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  border: 2px solid var(--accent);
-  box-shadow: inset 0 0 0 3px var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 72%, var(--border));
+  background: var(--accent-soft);
 }
 .copy-icon {
   width: 14px;
   height: 14px;
   border-radius: 3px;
-  background: linear-gradient(180deg, var(--file-soft), color-mix(in srgb, var(--file) 28%, var(--file-soft)));
+  background: var(--file-soft);
   border: 1px solid color-mix(in srgb, var(--file) 48%, var(--border));
 }
 .root-name {

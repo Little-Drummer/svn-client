@@ -1,17 +1,12 @@
 <script setup lang="ts">
 import { open } from '@tauri-apps/plugin-dialog'
 import { computed, ref, watch } from 'vue'
-import {
-  NButton,
-  NCard,
-  NForm,
-  NFormItem,
-  NInput,
-  NInputGroup,
-  NSpace,
-  useMessage,
-} from 'naive-ui'
 
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { useAppToast } from '@/composables/use-app-toast'
 import TaskOutput from '../components/TaskOutput.vue'
 import { api, describeError } from '../api/svn'
 import { useTasksStore } from '../stores/tasks'
@@ -22,7 +17,7 @@ const props = defineProps<{ repository?: RepositoryEntry | null }>()
 
 const tasksStore = useTasksStore()
 const wcStore = useWorkingCopiesStore()
-const message = useMessage()
+const toast = useAppToast()
 
 const url = ref('')
 const targetPath = ref('')
@@ -46,7 +41,7 @@ async function pickTarget() {
 
 async function start() {
   if (!url.value.trim() || !targetPath.value.trim()) {
-    message.warning('URL 和目标目录都不能为空')
+    toast.warning('URL 和目标目录都不能为空')
     return
   }
   try {
@@ -64,7 +59,7 @@ async function start() {
     })
     taskId.value = id
   } catch (e) {
-    message.error(describeError(e))
+    toast.error('启动检出失败', describeError(e))
   }
 }
 
@@ -87,9 +82,9 @@ watch(
       // 自动加入工作副本列表
       try {
         await wcStore.add(targetPath.value)
-        message.success('检出完成，已加入工作副本列表')
+        toast.success('检出完成，已加入工作副本列表')
       } catch (e) {
-        message.warning('检出完成但加入工作副本列表失败：' + describeError(e))
+        toast.warning('检出完成但加入工作副本列表失败', describeError(e))
       }
     }
   },
@@ -98,45 +93,57 @@ watch(
 
 <template>
   <div class="checkout-view">
-    <n-card title="检出 (svn checkout)" size="small" class="card">
-      <n-form label-placement="left" label-width="100" size="small">
-        <n-form-item label="远端 URL" required>
-          <n-input
-            v-model:value="url"
+    <Card class="card">
+      <CardHeader class="card-head">
+        <CardTitle>检出 (svn checkout)</CardTitle>
+      </CardHeader>
+      <CardContent>
+      <div class="checkout-form">
+        <div class="form-row">
+          <Label for="checkout-url">远端 URL</Label>
+          <Input
+            id="checkout-url"
+            v-model="url"
             placeholder="https://example.com/svn/repo/trunk"
             :disabled="running"
           />
-        </n-form-item>
-        <n-form-item label="本地目录" required>
-          <n-input-group>
-            <n-input
-              v-model:value="targetPath"
+        </div>
+        <div class="form-row">
+          <Label for="checkout-target">本地目录</Label>
+          <div class="input-group">
+            <Input
+              id="checkout-target"
+              v-model="targetPath"
               placeholder="/path/to/local/folder"
               :disabled="running"
             />
-            <n-button :disabled="running" @click="pickTarget">选择…</n-button>
-          </n-input-group>
-        </n-form-item>
-        <n-form-item label="Revision">
-          <n-input v-model:value="revision" placeholder="留空 = HEAD" :disabled="running" />
-        </n-form-item>
-        <n-form-item label="用户名">
-          <n-input v-model:value="username" placeholder="可选" :disabled="running" />
-        </n-form-item>
-        <n-form-item label="密码">
-          <n-input
-            v-model:value="password"
+            <Button variant="outline" :disabled="running" @click="pickTarget">选择…</Button>
+          </div>
+        </div>
+        <div class="form-row">
+          <Label for="checkout-revision">Revision</Label>
+          <Input id="checkout-revision" v-model="revision" placeholder="留空 = HEAD" :disabled="running" />
+        </div>
+        <div class="form-row">
+          <Label for="checkout-username">用户名</Label>
+          <Input id="checkout-username" v-model="username" placeholder="可选" :disabled="running" />
+        </div>
+        <div class="form-row">
+          <Label for="checkout-password">密码</Label>
+          <Input
+            id="checkout-password"
+            v-model="password"
             type="password"
-            show-password-on="click"
             placeholder="可选"
             :disabled="running"
           />
-        </n-form-item>
-        <n-space justify="end">
-          <n-button type="primary" :loading="running" @click="start">开始检出</n-button>
-        </n-space>
-      </n-form>
-    </n-card>
+        </div>
+        <div class="form-actions">
+          <Button :disabled="running" @click="start">{{ running ? '检出中' : '开始检出' }}</Button>
+        </div>
+      </div>
+      </CardContent>
+    </Card>
 
     <div class="output-wrap">
       <TaskOutput :task-id="taskId" />
@@ -150,15 +157,42 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 16px;
-  gap: 14px;
+  padding: 12px;
+  gap: 12px;
   background: var(--panel-bg-muted);
 }
 .card {
   flex-shrink: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: var(--shadow-sm);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  box-shadow: none;
+}
+.card-head {
+  padding: 14px 16px 8px;
+}
+.checkout-form {
+  display: grid;
+  gap: 12px;
+}
+.form-row {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+.form-row label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.input-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 .output-wrap {
   flex: 1;
@@ -167,7 +201,7 @@ watch(
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 9px;
   background: var(--panel-bg);
 }
 </style>
