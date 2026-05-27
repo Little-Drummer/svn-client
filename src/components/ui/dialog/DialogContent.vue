@@ -22,25 +22,112 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
 
 <template>
   <DialogPortal>
-    <DialogOverlay
-      class="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
-    />
+    <DialogOverlay class="dialog-overlay" />
     <DialogContent
       v-bind="forwarded"
-      :class="
-        cn(
-          'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
-          props.class,
-        )"
+      :class="cn('dialog-content', props.class)"
     >
       <slot />
-
-      <DialogClose
-        class="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground"
-      >
-        <X class="w-4 h-4" />
+      <DialogClose class="dialog-close">
+        <X class="w-3.5 h-3.5" />
         <span class="sr-only">Close</span>
       </DialogClose>
     </DialogContent>
   </DialogPortal>
 </template>
+
+<style scoped>
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+}
+.dialog-overlay[data-state='open'] {
+  animation: dialog-fade-in 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.dialog-overlay[data-state='closed'] {
+  animation: dialog-fade-out 140ms ease-out;
+}
+
+.dialog-content {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 51;
+  display: grid;
+  width: 100%;
+  max-width: 520px;
+  transform: translate(-50%, -50%);
+  gap: 14px;
+  padding: 20px 22px;
+  border-radius: var(--radius-window);
+  background: var(--mat-popover);
+  backdrop-filter: var(--vibrancy-popover);
+  -webkit-backdrop-filter: var(--vibrancy-popover);
+  box-shadow: var(--shadow-modal);
+  color: var(--fg-strong);
+  border: 0;
+}
+.dialog-content[data-state='open'] {
+  animation: dialog-pop-in 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.dialog-content[data-state='closed'] {
+  animation: dialog-pop-out 140ms ease-in;
+}
+
+.dialog-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+.dialog-close:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg-strong);
+}
+.dialog-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+@keyframes dialog-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dialog-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes dialog-pop-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes dialog-pop-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.97);
+  }
+}
+</style>

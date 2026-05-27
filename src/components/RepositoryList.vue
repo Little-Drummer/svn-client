@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import {
+  Cloud,
+  Download,
+  FolderTree,
+  Pencil,
+  Plug,
+  Plus,
+  Trash2,
+} from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -106,31 +116,110 @@ async function remove(id: string) {
 <template>
   <section class="repo-section">
     <div class="section-head">
-      <span>远端仓库</span>
-      <Button size="xs" @click="openCreate">添加</Button>
+      <span class="section-title">远端仓库</span>
+      <Button size="xs" variant="ghost" class="head-action" @click="openCreate">
+        <Plus class="icon-xs" />
+        添加
+      </Button>
     </div>
     <div class="repo-scroll">
-      <div v-if="store.items.length === 0" class="empty-text">暂无远端仓库</div>
+      <div v-if="store.items.length === 0" class="empty-text">
+        暂无远端仓库
+      </div>
       <div
         v-for="repo in store.items"
         :key="repo.id"
         class="repo-item"
         @click="emit('browse', repo)"
       >
-        <div class="repo-main">
+        <Cloud class="repo-icon" />
+        <div class="repo-text">
           <div class="repo-name">{{ repo.name }}</div>
           <div class="repo-url mono" :title="repo.url">{{ repo.url }}</div>
-          <div class="repo-meta">
-            <Badge v-if="repo.username" variant="outline">{{ repo.username }}</Badge>
-            <span v-if="repo.lastAccessedAt">最近连接 {{ new Date(repo.lastAccessedAt).toLocaleDateString() }}</span>
+          <div v-if="repo.username || repo.lastAccessedAt" class="repo-meta">
+            <Badge v-if="repo.username" class="user-pill">{{ repo.username }}</Badge>
+            <span v-if="repo.lastAccessedAt" class="meta-time">
+              {{ new Date(repo.lastAccessedAt).toLocaleDateString() }}
+            </span>
           </div>
         </div>
         <div class="repo-actions" @click.stop>
-          <Button size="xs" variant="ghost" :disabled="testing" @click="test(repo)">测试</Button>
-          <Button size="xs" variant="ghost" @click="emit('browse', repo)">浏览</Button>
-          <Button size="xs" variant="ghost" @click="emit('checkout', repo)">检出</Button>
-          <Button size="xs" variant="ghost" @click="openEdit(repo)">编辑</Button>
-          <Button size="xs" variant="ghost" class="danger-action" @click="remove(repo.id)">删除</Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  class="row-icon-btn"
+                  :disabled="testing"
+                  @click="test(repo)"
+                >
+                  <Plug class="icon-xs" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>测试连接</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  class="row-icon-btn"
+                  @click="emit('browse', repo)"
+                >
+                  <FolderTree class="icon-xs" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>浏览</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  class="row-icon-btn"
+                  @click="emit('checkout', repo)"
+                >
+                  <Download class="icon-xs" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>检出</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  class="row-icon-btn"
+                  @click="openEdit(repo)"
+                >
+                  <Pencil class="icon-xs" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>编辑</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  class="row-icon-btn danger-action"
+                  @click="remove(repo.id)"
+                >
+                  <Trash2 class="icon-xs" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>删除</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </div>
     </div>
@@ -169,22 +258,36 @@ async function remove(id: string) {
 .repo-section {
   display: flex;
   flex-direction: column;
-  flex: 0 0 40%;
+  flex: 0 0 42%;
   min-height: 180px;
-  max-height: 42%;
+  max-height: 46%;
   overflow: hidden;
-  border-bottom: 1px solid var(--border);
-  background: var(--sidebar-bg);
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  background: transparent;
 }
 .section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 36px;
-  padding: 8px 10px;
-  font-size: 12px;
+  padding: 14px 14px 6px 14px;
+  user-select: none;
+}
+.section-title {
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text-strong);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.head-action {
+  height: 22px;
+  padding: 0 6px;
+  color: var(--fg-muted);
+  font-size: var(--fs-caption);
+  gap: 4px;
+}
+.head-action:hover {
+  color: var(--fg-strong);
 }
 .repo-scroll {
   flex: 1;
@@ -193,37 +296,53 @@ async function remove(id: string) {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-top: 2px;
+  padding: 2px 0 8px;
 }
 .empty-text {
-  padding: 8px 10px;
-  font-size: 12px;
-  color: var(--text-muted);
+  padding: 8px 14px;
+  font-size: var(--fs-caption);
+  color: var(--fg-subtle);
 }
+
+/* ===== repo 行：与 wc-item 同款 source-list 胶囊 ===== */
 .repo-item {
-  margin: 0 6px 4px;
-  padding: 8px;
-  border: 1px solid transparent;
-  border-radius: 7px;
+  margin: 1px 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-row);
   background: transparent;
   cursor: pointer;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-height: 36px;
+  transition: background-color 120ms ease-out;
 }
 .repo-item:hover {
-  border-color: var(--border-subtle);
-  background: var(--panel-bg-subtle);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
-.repo-main {
-  cursor: pointer;
+.repo-icon {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--accent);
+  flex: none;
+}
+.repo-text {
+  min-width: 0;
 }
 .repo-name {
-  color: var(--text-strong);
+  color: var(--fg-strong);
   font-weight: 500;
-  font-size: 12px;
+  font-size: var(--fs-callout);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .repo-url {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-muted);
+  margin-top: 1px;
+  font-size: var(--fs-caption);
+  color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -232,17 +351,51 @@ async function remove(id: string) {
   display: flex;
   gap: 6px;
   align-items: center;
-  min-height: 18px;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-muted);
+  margin-top: 3px;
+  font-size: var(--fs-caption);
+  color: var(--fg-subtle);
+}
+.user-pill {
+  height: 16px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg-muted);
+  border: 0;
+}
+.meta-time {
+  font-feature-settings: 'tnum';
 }
 .repo-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 8px;
+  gap: 2px;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 140ms ease-out;
 }
+.repo-item:hover .repo-actions {
+  opacity: 1;
+}
+.row-icon-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--fg-muted);
+}
+.row-icon-btn:hover {
+  color: var(--fg-strong);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.danger-action:hover {
+  color: var(--danger) !important;
+}
+.icon-xs {
+  width: 12px;
+  height: 12px;
+}
+
 .repo-modal {
   width: min(560px, calc(100vw - 32px));
   border-radius: 12px;

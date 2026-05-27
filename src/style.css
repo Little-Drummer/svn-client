@@ -4,100 +4,335 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ============================================================
+   设计 Token —— macOS Sequoia 风格
+   ------------------------------------------------------------
+   分层：原始 token（mat / fg / stroke / accent / radius / shadow）
+        + shadcn 兼容别名（保持现有 ui/* 组件不破裂）
+   字号节奏对齐 SF Pro Text：title 17 / body 13 / caption 11
+   ============================================================ */
+
 :root {
-  --sans: Inter, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
-    'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif;
-  --mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Consolas, monospace;
-  --app-bg: #e9ebee;
-  --panel-bg: rgba(255, 255, 255, 0.74);
-  --panel-bg-muted: rgba(246, 247, 249, 0.72);
-  --panel-bg-subtle: rgba(250, 250, 252, 0.58);
-  --sidebar-bg: rgba(239, 240, 243, 0.72);
-  --toolbar-bg: rgba(248, 248, 250, 0.68);
-  --border: rgba(60, 60, 67, 0.16);
-  --border-subtle: rgba(60, 60, 67, 0.09);
-  --text-strong: #1d1d1f;
-  --text: #3a3a3c;
-  --text-muted: #737780;
+  /* ---------- 字体栈 ---------- */
+  /* 把 -apple-system / SF Pro 放最前；Inter 仅作非 mac 兜底 */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+    'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', Inter, system-ui, sans-serif;
+  --font-mono:
+    'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  --sans: var(--font-sans);
+  --mono: var(--font-mono);
+
+  /* ---------- 字号节奏 ---------- */
+  --fs-title: 17px;
+  --fs-headline: 15px;
+  --fs-body: 13px;
+  --fs-callout: 12px;
+  --fs-caption: 11px;
+  --fs-mono: 12px;
+  --lh-tight: 1.35;
+  --lh-normal: 1.5;
+
+  /* ---------- 圆角节奏 ---------- */
+  --radius-window: 12px;   /* 卡片 / Dialog / 大面板 */
+  --radius-control: 6px;   /* 按钮 / Input */
+  --radius-row: 6px;       /* sidebar 行的胶囊高亮 */
+  --radius-pill: 999px;    /* 徽章 / segmented control */
+  --radius-sm: 4px;
+  --radius: 6px;           /* shadcn 默认 radius — 收到 6px */
+
+  /* ---------- 材质层级（五层）----------
+     窗口最底层（透出壁纸）→ 侧栏（vibrancy）→ 内容区（几乎不透明）
+     → 工具条（内容区上叠一层）→ 弹层（重 blur 强 tint）
+  */
+  --mat-window:  #ecedef;                    /* app 底色，最透 */
+  --mat-sidebar: rgba(244, 245, 247, 0.72);  /* 侧栏，带 vibrancy */
+  --mat-content: #fbfbfc;                    /* 主工作区，几乎不透明 */
+  --mat-toolbar: rgba(248, 249, 251, 0.78);  /* 工具条，略压暗 */
+  --mat-popover: rgba(252, 252, 253, 0.92);  /* 弹层 */
+  --mat-elevated: #ffffff;                   /* 卡片 / 输入区 */
+
+  /* vibrancy filter 参考值，直接用 backdrop-filter 引用 */
+  --vibrancy-sidebar: blur(30px) saturate(180%);
+  --vibrancy-popover: blur(42px) saturate(200%);
+  --vibrancy-toolbar: blur(24px) saturate(160%);
+
+  /* ---------- 文本色 ---------- */
+  --fg-strong: #1d1d1f;       /* primary label */
+  --fg: #2c2c2e;              /* secondary label */
+  --fg-muted: #6e6e73;        /* tertiary label */
+  --fg-subtle: #98989d;       /* quaternary label */
+  --fg-on-accent: #ffffff;
+
+  /* ---------- 描边 / 分隔 ---------- */
+  --stroke: rgba(0, 0, 0, 0.12);          /* 主分隔，1px */
+  --stroke-soft: rgba(0, 0, 0, 0.07);     /* 行内极淡分隔，0.5px */
+  --stroke-strong: rgba(0, 0, 0, 0.18);   /* 弹层外描边 */
+  --hairline: 0.5px;
+
+  /* ---------- 强调色（macOS controlAccentColor）---------- */
   --accent: #007aff;
   --accent-hover: #0066d6;
-  --accent-soft: rgba(0, 122, 255, 0.11);
-  --accent-row: rgba(0, 122, 255, 0.12);
-  --success: #1f9d55;
-  --warning: #b7791f;
-  --folder: #d28a19;
-  --folder-soft: #fff3d6;
-  --file: #536dfe;
-  --file-soft: #eef1ff;
-  --danger-soft: rgba(255, 59, 48, 0.09);
-  --shadow-sm: none;
-  --shadow-md: 0 10px 28px rgba(15, 23, 42, 0.06);
-  --shadow-lg: 0 24px 64px rgba(15, 23, 42, 0.16);
-  font: 14px/1.5 var(--sans);
-  color-scheme: light dark;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-  --radius: 0.5rem;
-  --background: #f4f5f7;
-  --foreground: #1d1d1f;
-  --card: rgba(255, 255, 255, 0.82);
-  --card-foreground: #1d1d1f;
-  --popover: rgba(255, 255, 255, 0.94);
-  --popover-foreground: #1d1d1f;
-  --primary: #007aff;
-  --primary-foreground: #ffffff;
-  --secondary: rgba(60, 60, 67, 0.07);
-  --secondary-foreground: #1d1d1f;
-  --muted: rgba(60, 60, 67, 0.07);
-  --muted-foreground: #737780;
-  --accent-foreground: #ffffff;
-  --destructive: #ff3b30;
-  --input: rgba(60, 60, 67, 0.14);
-  --ring: rgba(0, 122, 255, 0.62);
+  --accent-active: #0058bf;
+  --accent-soft: rgba(0, 122, 255, 0.12);
+  --accent-row: rgba(0, 122, 255, 0.10);
+  --accent-ring: rgba(0, 122, 255, 0.45);
+
+  /* ---------- 语义色（SF 标准色板）---------- */
+  --success: #34c759;
+  --success-soft: rgba(52, 199, 89, 0.14);
+  --warning: #ff9f0a;
+  --warning-soft: rgba(255, 159, 10, 0.16);
+  --danger: #ff3b30;
+  --danger-soft: rgba(255, 59, 48, 0.12);
+  --info: #5ac8fa;
+  --info-soft: rgba(90, 200, 250, 0.14);
+  --purple: #af52de;
+  --purple-soft: rgba(175, 82, 222, 0.14);
+
+  /* 文件 / 文件夹色（替代之前的 file-soft / folder-soft）*/
+  --folder: #e0a82f;
+  --folder-soft: rgba(224, 168, 47, 0.16);
+  --file: #5b6cff;
+  --file-soft: rgba(91, 108, 255, 0.12);
+
+  /* ---------- 控件高光 / 阴影 ----------
+     macOS 控件的"实感"来自 1px 内高光 + 0.5px 外描边 + 极轻投影
+  */
+  --stroke-control:
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --stroke-accent:
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  --shadow-control: 0 1px 1.5px rgba(15, 23, 42, 0.06);
+  --shadow-pop:
+    0 0 0 0.5px rgba(0, 0, 0, 0.16),
+    0 12px 32px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+  --shadow-modal:
+    0 0 0 0.5px rgba(0, 0, 0, 0.18),
+    0 28px 64px rgba(0, 0, 0, 0.22),
+    0 4px 12px rgba(0, 0, 0, 0.1);
+
+  /* ============================================================
+     兼容层：保留旧 token 名映射到新 token
+     —— 现有组件不动也能 work，PR-4+ 再逐步切到新名
+     ============================================================ */
+
+  /* 旧材质 → 新材质 */
+  --app-bg: var(--mat-window);
+  --panel-bg: var(--mat-content);
+  --panel-bg-muted: color-mix(in srgb, var(--mat-content) 92%, var(--fg-muted) 8%);
+  --panel-bg-subtle: color-mix(in srgb, var(--mat-content) 96%, var(--fg-muted) 4%);
+  --sidebar-bg: var(--mat-sidebar);
+  --toolbar-bg: var(--mat-toolbar);
+
+  /* 旧文本 → 新文本 */
+  --text-strong: var(--fg-strong);
+  --text: var(--fg);
+  --text-muted: var(--fg-muted);
+
+  /* 旧描边 → 新描边 */
+  --border: var(--stroke);
+  --border-subtle: var(--stroke-soft);
+
+  /* 旧 accent → 新 accent（值未变，保险起见保留）*/
+
+  /* 旧 shadow → 新 shadow */
+  --shadow-sm: var(--shadow-control);
+  --shadow-md: var(--shadow-pop);
+  --shadow-lg: var(--shadow-modal);
+
+  /* ---------- shadcn-vue 兼容 token ---------- */
+  --background: var(--mat-content);
+  --foreground: var(--fg-strong);
+  --card: var(--mat-elevated);
+  --card-foreground: var(--fg-strong);
+  --popover: var(--mat-popover);
+  --popover-foreground: var(--fg-strong);
+  --primary: var(--accent);
+  --primary-foreground: var(--fg-on-accent);
+  --secondary: rgba(0, 0, 0, 0.05);
+  --secondary-foreground: var(--fg-strong);
+  --muted: rgba(0, 0, 0, 0.04);
+  --muted-foreground: var(--fg-muted);
+  --accent-foreground: var(--fg-on-accent);
+  --destructive: var(--danger);
+  --destructive-foreground: #fff;
+  --input: rgba(0, 0, 0, 0.14);
+  --ring: var(--accent-ring);
+
+  /* charts（保留 oklch 颜色卡）*/
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+
+  /* sidebar（shadcn 命名，避免组件库用到时报错）*/
+  --sidebar: var(--mat-sidebar);
+  --sidebar-foreground: var(--fg-strong);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--fg-on-accent);
+  --sidebar-accent: rgba(0, 0, 0, 0.05);
+  --sidebar-accent-foreground: var(--fg-strong);
+  --sidebar-border: var(--stroke);
+  --sidebar-ring: var(--accent-ring);
+
+  /* ---------- 全局基础 ---------- */
+  font: var(--fs-body) / var(--lh-normal) var(--sans);
+  color: var(--fg);
+  color-scheme: light dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'ss01', 'cv11', 'tnum' 0;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --app-bg: #1b1c1f;
-    --panel-bg: rgba(35, 36, 40, 0.74);
-    --panel-bg-muted: rgba(29, 30, 34, 0.78);
-    --panel-bg-subtle: rgba(42, 43, 48, 0.58);
-    --sidebar-bg: rgba(31, 32, 36, 0.72);
-    --toolbar-bg: rgba(39, 40, 44, 0.68);
-    --border: rgba(235, 235, 245, 0.14);
-    --border-subtle: rgba(235, 235, 245, 0.09);
-    --text-strong: #f5f5f7;
-    --text: #d6d6dc;
-    --text-muted: #989aa2;
+    --mat-window:  #1c1d20;
+    --mat-sidebar: rgba(36, 37, 41, 0.72);
+    --mat-content: #232428;
+    --mat-toolbar: rgba(40, 41, 45, 0.78);
+    --mat-popover: rgba(48, 49, 53, 0.92);
+    --mat-elevated: #2c2d31;
+
+    --fg-strong: #f5f5f7;
+    --fg: #e3e3e6;
+    --fg-muted: #9a9aa1;
+    --fg-subtle: #6f6f76;
+
+    --stroke: rgba(255, 255, 255, 0.10);
+    --stroke-soft: rgba(255, 255, 255, 0.06);
+    --stroke-strong: rgba(0, 0, 0, 0.6);
+
     --accent: #0a84ff;
     --accent-hover: #409cff;
-    --accent-soft: rgba(10, 132, 255, 0.16);
-    --accent-row: rgba(10, 132, 255, 0.17);
-    --success: #32d074;
-    --warning: #ffd166;
-    --folder: #f5b84b;
-    --folder-soft: rgba(245, 184, 75, 0.14);
-    --file: #9aa7ff;
-    --file-soft: rgba(154, 167, 255, 0.13);
-    --danger-soft: rgba(255, 69, 58, 0.14);
-    --shadow-sm: none;
-    --shadow-md: 0 12px 34px rgba(0, 0, 0, 0.24);
-    --shadow-lg: 0 28px 78px rgba(0, 0, 0, 0.42);
+    --accent-active: #1a6fdb;
+    --accent-soft: rgba(10, 132, 255, 0.18);
+    --accent-row: rgba(10, 132, 255, 0.14);
+    --accent-ring: rgba(10, 132, 255, 0.55);
+
+    --success: #32d74b;
+    --success-soft: rgba(50, 215, 75, 0.16);
+    --warning: #ffb340;
+    --warning-soft: rgba(255, 179, 64, 0.18);
+    --danger: #ff453a;
+    --danger-soft: rgba(255, 69, 58, 0.16);
+    --info: #64d2ff;
+    --info-soft: rgba(100, 210, 255, 0.16);
+    --purple: #bf5af2;
+    --purple-soft: rgba(191, 90, 242, 0.16);
+
+    --folder: #f3b449;
+    --folder-soft: rgba(243, 180, 73, 0.14);
+    --file: #94a3ff;
+    --file-soft: rgba(148, 163, 255, 0.14);
+
+    --stroke-control:
+      inset 0 0 0 0.5px rgba(255, 255, 255, 0.10),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --stroke-accent:
+      inset 0 0 0 0.5px rgba(0, 0, 0, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    --shadow-control: 0 1px 1.5px rgba(0, 0, 0, 0.4);
+    --shadow-pop:
+      0 0 0 0.5px rgba(0, 0, 0, 0.6),
+      0 14px 38px rgba(0, 0, 0, 0.5),
+      0 2px 6px rgba(0, 0, 0, 0.4);
+    --shadow-modal:
+      0 0 0 0.5px rgba(0, 0, 0, 0.7),
+      0 32px 72px rgba(0, 0, 0, 0.55),
+      0 4px 16px rgba(0, 0, 0, 0.35);
+
+    --secondary: rgba(255, 255, 255, 0.07);
+    --muted: rgba(255, 255, 255, 0.06);
+    --input: rgba(255, 255, 255, 0.14);
   }
 }
+
+/* ============================================================
+   显式 .dark 类（跟随系统的同时支持手动切换）
+   ============================================================ */
+.dark {
+  --mat-window:  #1c1d20;
+  --mat-sidebar: rgba(36, 37, 41, 0.72);
+  --mat-content: #232428;
+  --mat-toolbar: rgba(40, 41, 45, 0.78);
+  --mat-popover: rgba(48, 49, 53, 0.92);
+  --mat-elevated: #2c2d31;
+
+  --fg-strong: #f5f5f7;
+  --fg: #e3e3e6;
+  --fg-muted: #9a9aa1;
+  --fg-subtle: #6f6f76;
+
+  --stroke: rgba(255, 255, 255, 0.10);
+  --stroke-soft: rgba(255, 255, 255, 0.06);
+  --stroke-strong: rgba(0, 0, 0, 0.6);
+
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --accent-active: #1a6fdb;
+  --accent-soft: rgba(10, 132, 255, 0.18);
+  --accent-row: rgba(10, 132, 255, 0.14);
+  --accent-ring: rgba(10, 132, 255, 0.55);
+
+  --success: #32d74b;
+  --success-soft: rgba(50, 215, 75, 0.16);
+  --warning: #ffb340;
+  --warning-soft: rgba(255, 179, 64, 0.18);
+  --danger: #ff453a;
+  --danger-soft: rgba(255, 69, 58, 0.16);
+  --info: #64d2ff;
+  --info-soft: rgba(100, 210, 255, 0.16);
+
+  --folder: #f3b449;
+  --folder-soft: rgba(243, 180, 73, 0.14);
+  --file: #94a3ff;
+  --file-soft: rgba(148, 163, 255, 0.14);
+
+  --stroke-control:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --stroke-accent:
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --shadow-control: 0 1px 1.5px rgba(0, 0, 0, 0.4);
+  --shadow-pop:
+    0 0 0 0.5px rgba(0, 0, 0, 0.6),
+    0 14px 38px rgba(0, 0, 0, 0.5),
+    0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-modal:
+    0 0 0 0.5px rgba(0, 0, 0, 0.7),
+    0 32px 72px rgba(0, 0, 0, 0.55),
+    0 4px 16px rgba(0, 0, 0, 0.35);
+
+  --secondary: rgba(255, 255, 255, 0.07);
+  --muted: rgba(255, 255, 255, 0.06);
+  --input: rgba(255, 255, 255, 0.14);
+
+  /* shadcn 别名同步 */
+  --background: var(--mat-content);
+  --foreground: var(--fg-strong);
+  --card: var(--mat-elevated);
+  --card-foreground: var(--fg-strong);
+  --popover: var(--mat-popover);
+  --popover-foreground: var(--fg-strong);
+  --primary: var(--accent);
+  --primary-foreground: #fff;
+  --secondary-foreground: var(--fg-strong);
+  --muted-foreground: var(--fg-muted);
+  --accent-foreground: #fff;
+  --destructive: var(--danger);
+  --ring: var(--accent-ring);
+}
+
+/* ============================================================
+   基础元素
+   ============================================================ */
 
 html,
 body,
@@ -109,40 +344,69 @@ body,
 
 body {
   overflow: hidden;
-  background: var(--app-bg);
-  color: var(--text);
+  background: var(--mat-window);
+  color: var(--fg);
+  font: var(--fs-body) / var(--lh-normal) var(--sans);
 }
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-* {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text-muted) 38%, transparent) transparent;
-}
-
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text-muted) 34%, transparent);
-  background-clip: content-box;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--fg-strong);
 }
 
 code,
 .mono {
   font-family: var(--mono);
+  font-size: var(--fs-mono);
+  font-feature-settings: 'liga' 0, 'calt' 0;
+}
+
+/* ============================================================
+   macOS 风滚动条 —— overlay 风格，hover 才显
+   ============================================================ */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: color-mix(in srgb, var(--fg-muted) 36%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  transition: background-color 160ms ease-out;
+}
+
+*:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg-muted) 32%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg-muted) 60%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Monaco diff 容器始终撑满父级 */
@@ -152,100 +416,53 @@ code,
   min-height: 240px;
 }
 
-@theme inline {
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --color-foreground: var(--foreground);
-  --color-background: var(--background);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-}
+/* ============================================================
+   Tailwind v4 主题映射
+   ============================================================ */
 
-.dark {
-  --app-bg: #1b1c1f;
-  --panel-bg: rgba(35, 36, 40, 0.74);
-  --panel-bg-muted: rgba(29, 30, 34, 0.78);
-  --panel-bg-subtle: rgba(42, 43, 48, 0.58);
-  --sidebar-bg: rgba(31, 32, 36, 0.72);
-  --toolbar-bg: rgba(39, 40, 44, 0.68);
-  --border: rgba(235, 235, 245, 0.14);
-  --border-subtle: rgba(235, 235, 245, 0.09);
-  --text-strong: #f5f5f7;
-  --text: #d6d6dc;
-  --text-muted: #989aa2;
-  --accent: #0a84ff;
-  --accent-hover: #409cff;
-  --accent-soft: rgba(10, 132, 255, 0.16);
-  --accent-row: rgba(10, 132, 255, 0.17);
-  --success: #32d074;
-  --warning: #ffd166;
-  --folder: #f5b84b;
-  --folder-soft: rgba(245, 184, 75, 0.14);
-  --file: #9aa7ff;
-  --file-soft: rgba(154, 167, 255, 0.13);
-  --danger-soft: rgba(255, 69, 58, 0.14);
-  --shadow-sm: none;
-  --shadow-md: 0 12px 34px rgba(0, 0, 0, 0.24);
-  --shadow-lg: 0 28px 78px rgba(0, 0, 0, 0.42);
-  --background: #1b1c1f;
-  --foreground: #f5f5f7;
-  --card: rgba(36, 37, 41, 0.82);
-  --card-foreground: #f5f5f7;
-  --popover: rgba(42, 43, 48, 0.94);
-  --popover-foreground: #f5f5f7;
-  --primary: #0a84ff;
-  --primary-foreground: #ffffff;
-  --secondary: rgba(235, 235, 245, 0.1);
-  --secondary-foreground: #f5f5f7;
-  --muted: rgba(235, 235, 245, 0.1);
-  --muted-foreground: #989aa2;
-  --accent-foreground: #ffffff;
-  --destructive: #ff453a;
-  --input: rgba(235, 235, 245, 0.16);
-  --ring: rgba(10, 132, 255, 0.72);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+@theme inline {
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-sans);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius-window);
+  --radius-xl: calc(var(--radius-window) + 4px);
 }
 
 @layer base {
@@ -254,5 +471,147 @@ code,
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* ============================================================
+   macOS 控件层（components）
+   —— Button / Input / Checkbox / Switch 的具象样式
+   通过 utility class 集中收口，避免分散在多个 cva 里堆 arbitrary values
+   ============================================================ */
+
+@layer components {
+  /* ----- Bezeled 按钮（macOS NSButton 默认）----- */
+  .ctl-bezeled {
+    background: var(--mat-elevated);
+    color: var(--fg-strong);
+    box-shadow: var(--stroke-control), var(--shadow-control);
+    border: 0;
+  }
+  .ctl-bezeled:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--mat-elevated) 92%, var(--fg) 8%);
+  }
+  .ctl-bezeled:active:not(:disabled) {
+    background: color-mix(in srgb, var(--mat-elevated) 85%, var(--fg) 15%);
+    box-shadow:
+      inset 0 0 0 0.5px rgba(0, 0, 0, 0.16),
+      inset 0 1px 1.5px rgba(0, 0, 0, 0.06);
+  }
+
+  /* ----- Accent 主按钮（macOS NSButton .borderedProminent）----- */
+  .ctl-accent {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent) 86%, white 14%) 0%,
+        var(--accent) 50%,
+        color-mix(in srgb, var(--accent) 92%, black 8%) 100%
+      );
+    color: #fff;
+    box-shadow: var(--stroke-accent), 0 1px 1.5px rgba(0, 70, 180, 0.18);
+    border: 0;
+    text-shadow: 0 0.5px 0 rgba(0, 0, 0, 0.12);
+  }
+  .ctl-accent:hover:not(:disabled) {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent-hover) 86%, white 14%) 0%,
+        var(--accent-hover) 50%,
+        color-mix(in srgb, var(--accent-hover) 92%, black 8%) 100%
+      );
+  }
+  .ctl-accent:active:not(:disabled) {
+    background: var(--accent-active);
+    box-shadow:
+      inset 0 0 0 0.5px rgba(0, 0, 0, 0.32),
+      inset 0 1.5px 2px rgba(0, 0, 0, 0.18);
+  }
+  .dark .ctl-accent {
+    text-shadow: none;
+  }
+
+  /* ----- Destructive 主按钮（红色 capsule）----- */
+  .ctl-destructive {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--danger) 86%, white 14%) 0%,
+        var(--danger) 50%,
+        color-mix(in srgb, var(--danger) 92%, black 8%) 100%
+      );
+    color: #fff;
+    box-shadow: var(--stroke-accent), 0 1px 1.5px rgba(180, 0, 0, 0.22);
+    border: 0;
+  }
+  .ctl-destructive:hover:not(:disabled) {
+    filter: brightness(1.04);
+  }
+  .ctl-destructive:active:not(:disabled) {
+    filter: brightness(0.92);
+  }
+
+  /* ----- Secondary 浅灰胶囊（NSButton .bordered 简化版）----- */
+  .ctl-secondary {
+    background: color-mix(in srgb, var(--fg) 8%, transparent);
+    color: var(--fg-strong);
+    box-shadow: inset 0 0 0 0.5px var(--stroke-soft);
+    border: 0;
+  }
+  .ctl-secondary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--fg) 12%, transparent);
+  }
+  .ctl-secondary:active:not(:disabled) {
+    background: color-mix(in srgb, var(--fg) 16%, transparent);
+  }
+
+  /* ----- Ghost 无背景，仅 hover 显淡灰 ----- */
+  .ctl-ghost {
+    background: transparent;
+    color: var(--fg);
+    border: 0;
+    box-shadow: none;
+  }
+  .ctl-ghost:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--fg) 7%, transparent);
+    color: var(--fg-strong);
+  }
+  .ctl-ghost:active:not(:disabled) {
+    background: color-mix(in srgb, var(--fg) 12%, transparent);
+  }
+
+  /* ----- Link 文本按钮 ----- */
+  .ctl-link {
+    background: transparent;
+    color: var(--accent);
+    border: 0;
+    padding: 0;
+    text-underline-offset: 3px;
+  }
+  .ctl-link:hover:not(:disabled) {
+    text-decoration: underline;
+  }
+
+  /* ----- Input / Textarea 控件 ----- */
+  .ctl-input {
+    background: var(--mat-elevated);
+    color: var(--fg-strong);
+    border: 0;
+    box-shadow: var(--stroke-control);
+    border-radius: var(--radius-control);
+  }
+  .ctl-input::placeholder {
+    color: var(--fg-subtle);
+  }
+  .ctl-input:focus,
+  .ctl-input:focus-visible {
+    outline: none;
+    box-shadow:
+      inset 0 0 0 0.5px var(--accent),
+      0 0 0 3px var(--accent-ring);
+  }
+  .ctl-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 }

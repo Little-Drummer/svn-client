@@ -3,29 +3,46 @@ import { cva } from "class-variance-authority"
 
 export { default as Button } from "./Button.vue"
 
+/**
+ * macOS 风格 Button：
+ *   default → accent capsule（蓝渐变 + 内高光）
+ *   destructive → 红色 capsule
+ *   outline → bezeled（白底 + hairline + 极轻投影）
+ *   secondary → 浅灰胶囊
+ *   ghost → 透明，仅 hover 显
+ *   link → 文本按钮
+ *
+ * 尺寸节奏对齐 macOS：
+ *   xs 22 / sm 26 / default 28 / lg 36
+ *   icon-* 提供等宽 icon-only 按钮（hover-revealed action 用）
+ */
 export const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  [
+    "inline-flex items-center justify-center gap-1.5 whitespace-nowrap",
+    "font-medium select-none cursor-default",
+    "transition-[background-color,box-shadow,filter,color] duration-150 ease-out",
+    "focus-visible:outline-none focus-visible:[box-shadow:inset_0_0_0_0.5px_var(--accent),0_0_0_3px_var(--accent-ring)]",
+    "disabled:pointer-events-none disabled:opacity-45",
+    "[&_svg]:pointer-events-none [&_svg]:shrink-0",
+  ].join(" "),
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-        outline:
-          "border border-border bg-background/55 hover:bg-secondary hover:text-secondary-foreground",
-        secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-secondary hover:text-secondary-foreground",
-        link: "text-primary underline-offset-4 hover:underline",
+        default: "ctl-accent",
+        destructive: "ctl-destructive",
+        outline: "ctl-bezeled",
+        secondary: "ctl-secondary",
+        ghost: "ctl-ghost",
+        link: "ctl-link h-auto",
       },
       size: {
-        "default": "h-8 px-3.5 py-1.5",
-        "xs": "h-6 rounded px-2 text-xs",
-        "sm": "h-7 rounded-md px-2.5 text-xs",
-        "lg": "h-10 rounded-md px-8",
-        "icon": "size-8",
-        "icon-sm": "size-7",
-        "icon-lg": "size-10",
+        "default": "h-7 px-3 text-[13px] rounded-md",
+        "xs": "h-[22px] px-2 text-[11px] rounded-[5px]",
+        "sm": "h-[26px] px-2.5 text-[12px] rounded-md",
+        "lg": "h-9 px-5 text-[14px] rounded-md",
+        "icon": "size-7 rounded-md",
+        "icon-sm": "size-[26px] rounded-md",
+        "icon-lg": "size-9 rounded-md",
       },
     },
     defaultVariants: {

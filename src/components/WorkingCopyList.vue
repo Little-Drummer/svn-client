@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { open } from '@tauri-apps/plugin-dialog'
 import { computed, onMounted, ref } from 'vue'
+import {
+  ChevronDown,
+  FolderGit2,
+  HardDrive,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -87,8 +95,12 @@ function toggleRoot(root: string) {
 
 <template>
   <div class="wc-list">
-    <div class="wc-toolbar">
-      <Button size="sm" @click="pickAndAdd">添加工作副本</Button>
+    <div class="wc-section-head">
+      <span class="section-title">工作副本</span>
+      <Button size="xs" variant="ghost" class="head-action" @click="pickAndAdd">
+        <Plus class="icon-xs" />
+        添加
+      </Button>
     </div>
     <div class="wc-scroll">
       <div v-if="items.length === 0" class="wc-empty">
@@ -96,8 +108,10 @@ function toggleRoot(root: string) {
       </div>
       <div v-for="group in groups" :key="group.root" class="wc-group">
         <button class="root-row" type="button" @click="toggleRoot(group.root)">
-          <span :class="['chevron', { collapsed: collapsedRoots.has(group.root) }]" />
-          <span class="root-icon" />
+          <ChevronDown
+            :class="['root-chevron', { collapsed: collapsedRoots.has(group.root) }]"
+          />
+          <FolderGit2 class="root-icon" />
           <span class="root-name" :title="group.root">{{ rootLabel(group.root) }}</span>
           <span class="root-count mono">{{ group.copies.length }}</span>
         </button>
@@ -108,26 +122,47 @@ function toggleRoot(root: string) {
             :class="['wc-item', { active: wc.id === store.selectedId }]"
             @click="store.select(wc.id)"
           >
-            <div class="wc-name" :title="wc.path">
-              <span class="copy-icon" />
-              {{ shortPath(wc.path) }}
-            </div>
-            <div class="wc-meta mono">
-              <span v-if="wc.revision">r{{ wc.revision }}</span>
-              <span v-if="wc.url" class="wc-url" :title="wc.url">{{ wc.url }}</span>
-            </div>
-            <div class="wc-actions" @click.stop>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button size="xs" variant="ghost" @click="refresh(wc.id)">刷新</Button>
-                  </TooltipTrigger>
-                  <TooltipContent>重新读取 svn info</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <Button size="xs" variant="ghost" class="danger-action" @click="remove(wc.id)">
-                移除
-              </Button>
+            <div class="wc-row-main">
+              <HardDrive class="wc-icon" />
+              <div class="wc-text">
+                <div class="wc-name" :title="wc.path">{{ shortPath(wc.path) }}</div>
+                <div class="wc-meta">
+                  <span v-if="wc.revision" class="meta-rev mono">r{{ wc.revision }}</span>
+                  <span v-if="wc.url" class="wc-url mono" :title="wc.url">{{ wc.url }}</span>
+                </div>
+              </div>
+              <div class="wc-actions" @click.stop>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        class="row-icon-btn"
+                        @click="refresh(wc.id)"
+                      >
+                        <RefreshCw class="icon-xs" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>重新读取 svn info</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        class="row-icon-btn danger-action"
+                        @click="remove(wc.id)"
+                      >
+                        <Trash2 class="icon-xs" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>从列表移除</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
             </div>
           </div>
         </div>
@@ -140,125 +175,88 @@ function toggleRoot(root: string) {
 .wc-list {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  background: var(--sidebar-bg);
+  flex: 1;
+  min-height: 0;
+  background: transparent;
 }
-.wc-toolbar {
-  min-height: 38px;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--toolbar-bg);
+
+/* ===== 分组标题（NSSourceList 风格：小写灰、字距）===== */
+.wc-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 14px 6px 14px;
+  user-select: none;
 }
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.head-action {
+  height: 22px;
+  padding: 0 6px;
+  color: var(--fg-muted);
+  font-size: var(--fs-caption);
+  gap: 4px;
+}
+.head-action:hover {
+  color: var(--fg-strong);
+}
+
 .wc-scroll {
   flex: 1;
   height: 0;
   min-height: 0;
   overflow: auto;
-  padding: 6px 0;
+  padding: 2px 0 8px;
 }
 .wc-empty {
-  padding: 24px 12px;
+  padding: 16px 12px;
   text-align: center;
 }
-.wc-item {
-  margin: 3px 6px 3px 22px;
-  padding: 8px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  cursor: pointer;
-}
-.wc-item.active {
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  background: var(--accent-row);
-}
-.wc-item:hover {
-  border-color: var(--border-subtle);
-  background: var(--panel-bg-subtle);
-}
-.wc-name {
-  color: var(--text-strong);
-  font-weight: 500;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wc-meta {
-  font-size: 11px;
-  color: var(--text-muted);
-  display: flex;
-  gap: 6px;
-  margin-top: 2px;
-}
-.wc-url {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wc-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
-}
-.danger-action {
-  color: var(--destructive);
-}
+
+/* ===== 仓库分组 ===== */
 .wc-group {
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .root-row {
   width: calc(100% - 12px);
-  margin: 0 6px 2px;
-  min-height: 28px;
+  margin: 0 6px 1px;
+  min-height: 26px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-row);
   background: transparent;
-  color: var(--text);
+  color: var(--fg);
   display: grid;
-  grid-template-columns: 12px 16px minmax(0, 1fr) auto;
-  gap: 6px;
+  grid-template-columns: 14px 16px minmax(0, 1fr) auto;
+  gap: 7px;
   align-items: center;
   cursor: pointer;
   text-align: left;
   font: inherit;
-  padding: 4px 6px;
+  padding: 3px 8px;
+  transition: background-color 120ms ease-out;
 }
 .root-row:hover {
-  background: var(--panel-bg-subtle);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
-.chevron {
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 6px solid var(--text-muted);
+.root-chevron {
+  width: 12px;
+  height: 12px;
+  color: var(--fg-muted);
+  transition: transform 140ms ease-out;
 }
-.chevron.collapsed {
+.root-chevron.collapsed {
   transform: rotate(-90deg);
 }
-.root-icon,
-.copy-icon {
-  display: inline-block;
-  flex: none;
-}
 .root-icon {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--accent) 72%, var(--border));
-  background: var(--accent-soft);
-}
-.copy-icon {
   width: 14px;
   height: 14px;
-  border-radius: 3px;
-  background: var(--file-soft);
-  border: 1px solid color-mix(in srgb, var(--file) 48%, var(--border));
+  color: var(--accent);
+  flex: none;
 }
 .root-name {
   min-width: 0;
@@ -266,10 +264,128 @@ function toggleRoot(root: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--fg-strong);
+  font-size: var(--fs-callout);
 }
 .root-count {
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--fg-subtle);
+  font-size: var(--fs-caption);
+  font-feature-settings: 'tnum';
+}
+
+/* ===== 工作副本行（NSSourceList capsule selection）===== */
+.copy-list {
+  padding-left: 18px;
+}
+.wc-item {
+  margin: 1px 6px;
+  padding: 0;
+  border-radius: var(--radius-row);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+  position: relative;
+}
+.wc-item:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.wc-item.active {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+}
+.wc-row-main {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  min-height: 36px;
+}
+.wc-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--fg-muted);
+  flex: none;
+}
+.wc-item.active .wc-icon {
+  color: rgba(255, 255, 255, 0.85);
+}
+.wc-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wc-name {
+  font-size: var(--fs-callout);
+  font-weight: 500;
+  color: var(--fg-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wc-item.active .wc-name {
+  color: #fff;
+  font-weight: 600;
+}
+.wc-meta {
+  font-size: var(--fs-caption);
+  color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+.wc-item.active .wc-meta {
+  color: rgba(255, 255, 255, 0.75);
+}
+.meta-rev {
+  flex: none;
+  font-feature-settings: 'tnum';
+}
+.wc-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wc-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+.wc-item:hover .wc-actions,
+.wc-item.active .wc-actions {
+  opacity: 1;
+}
+.row-icon-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--fg-muted);
+}
+.row-icon-btn:hover {
+  color: var(--fg-strong);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.wc-item.active .row-icon-btn {
+  color: rgba(255, 255, 255, 0.78);
+}
+.wc-item.active .row-icon-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+.danger-action:hover {
+  color: var(--danger) !important;
+}
+.wc-item.active .danger-action:hover {
+  color: #ffd6d3 !important;
+}
+
+.icon-xs {
+  width: 12px;
+  height: 12px;
 }
 </style>

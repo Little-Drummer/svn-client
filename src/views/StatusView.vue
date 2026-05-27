@@ -1,5 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import {
+  ChevronRight,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  RefreshCw,
+} from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -404,8 +412,10 @@ async function ignoreSelected() {
           v-if="leftMode === 'tree'"
           size="xs"
           variant="ghost"
+          class="toolbar-action"
           @click="showCreateFolder = true"
         >
+          <FolderPlus class="icon-xs" />
           新建文件夹
         </Button>
         <label
@@ -420,7 +430,10 @@ async function ignoreSelected() {
         </label>
         <Switch v-model="statusStore.showUnversioned" @update:model-value="reload" />
         <span class="hint">显示未跟踪</span>
-        <Button size="xs" variant="ghost" @click="reload">刷新</Button>
+        <Button size="xs" variant="ghost" class="toolbar-action" @click="reload">
+          <RefreshCw class="icon-xs" />
+          刷新
+        </Button>
       </div>
       <div v-if="leftMode === 'tree'" class="tree-scroll">
         <LoadingSpinner v-if="fileTreeLoading" />
@@ -436,12 +449,17 @@ async function ignoreSelected() {
           :style="{ paddingLeft: `${10 + row.depth * 16}px` }"
           @click="selectTreeEntry(row.entry)"
         >
-          <span
+          <ChevronRight
             v-if="row.entry.kind === 'dir'"
-            :class="['tree-caret', { collapsed: !expandedDirs.has(row.entry.path) }]"
+            :class="['tree-caret', { expanded: expandedDirs.has(row.entry.path) }]"
           />
           <span v-else class="tree-caret placeholder" />
-          <span :class="['tree-icon', row.entry.kind === 'dir' ? 'dir-icon' : 'file-icon']" />
+          <component
+            :is="row.entry.kind === 'dir'
+              ? (expandedDirs.has(row.entry.path) ? FolderOpen : Folder)
+              : FileText"
+            :class="['tree-icon', row.entry.kind === 'dir' ? 'tree-icon-dir' : 'tree-icon-file']"
+          />
           <Checkbox
             :disabled="!statusByPath.has(row.entry.path) || ['normal', 'ignored', 'external'].includes(fileStatus(row.entry.path))"
             :model-value="checkedPaths.has(row.entry.path)"
@@ -595,12 +613,13 @@ async function ignoreSelected() {
 </template>
 
 <style scoped>
+/* ============ 三栏容器 ============ */
 .status-view {
   display: grid;
-  grid-template-columns: 330px 1fr 330px;
+  grid-template-columns: 320px 1fr 340px;
   height: 100%;
   min-height: 0;
-  background: var(--panel-bg);
+  background: var(--mat-content);
 }
 .file-list,
 .diff-pane,
@@ -611,174 +630,294 @@ async function ignoreSelected() {
   height: 100%;
 }
 .file-list {
-  border-right: 1px solid var(--border);
-  background: var(--panel-bg-subtle);
+  border-right: var(--hairline) solid var(--stroke-soft);
 }
 .side-pane {
-  border-left: 1px solid var(--border);
-  background: var(--panel-bg-subtle);
+  border-left: var(--hairline) solid var(--stroke-soft);
 }
-.list-toolbar {
+
+/* ============ 顶部工具条（list-toolbar / side-tabs）============ */
+.list-toolbar,
+.side-tabs {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 38px;
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--toolbar-bg);
-  font-size: 12px;
+  gap: 8px;
+  height: 36px;
+  flex: none;
+  padding: 0 10px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  background: transparent;
+  font-size: var(--fs-callout);
 }
 .spacer {
   flex: 1;
 }
-.list-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
+.hint {
+  font-size: var(--fs-caption);
+  color: var(--fg-muted);
+  user-select: none;
 }
-.tree-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
+
+/* ============ mode-switch 胶囊 segmented control ============ */
 .mode-switch {
   display: flex;
   gap: 2px;
   padding: 2px;
-  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--panel-bg-muted);
+  background: rgba(0, 0, 0, 0.06);
+  border: var(--hairline) solid var(--stroke-soft);
 }
+.dark .mode-switch {
+  background: rgba(255, 255, 255, 0.05);
+}
+.mode-switch :deep(button) {
+  height: 22px !important;
+  padding: 0 10px !important;
+  border-radius: 5px !important;
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 0;
+  box-shadow: none;
+  transition: background-color 140ms ease-out, color 140ms ease-out, box-shadow 160ms ease-out;
+}
+.mode-switch :deep(button:hover) {
+  color: var(--fg);
+  background: transparent;
+}
+.mode-switch :deep(button.bg-secondary),
+.mode-switch :deep(button[data-active='true']) {
+  color: var(--fg-strong);
+  background: var(--mat-elevated);
+  box-shadow:
+    inset 0 0 0 0.5px var(--stroke),
+    0 1px 1.5px rgba(0, 0, 0, 0.06);
+}
+.dark .mode-switch :deep(button.bg-secondary) {
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.08),
+    0 1px 1.5px rgba(0, 0, 0, 0.4);
+}
+
 .inline-check {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--text);
-  font-size: 12px;
+  color: var(--fg);
+  font-size: var(--fs-caption);
   user-select: none;
+}
+
+/* ============ 列表滚动区 ============ */
+.list-scroll,
+.tree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+/* ============ 分组（变更视图）============ */
+.group {
+  margin-bottom: 6px;
 }
 .group-header {
   display: flex;
-  gap: 6px;
   align-items: center;
-  padding: 6px 10px 4px;
-  background: var(--panel-bg-muted);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 6px;
+  padding: 10px 12px 4px;
+  background: transparent;
+  border-bottom: 0;
 }
 .group-count {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: var(--fs-caption);
+  font-feature-settings: 'tnum';
+  color: var(--fg-subtle);
 }
+
+/* ============ 文件行（变更视图 & 树视图）============ */
 .file-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   min-height: 28px;
-  padding: 3px 10px 3px 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  margin: 1px 6px;
+  padding: 3px 8px;
+  border-radius: var(--radius-row);
+  border: 0;
   cursor: pointer;
-  background: var(--panel-bg);
+  background: transparent;
+  transition: background-color 120ms ease-out;
 }
+.file-row:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.file-row.active {
+  background: var(--accent);
+}
+
 .tree-row {
   display: grid;
   grid-template-columns: 12px 16px 22px minmax(0, 1fr) auto;
-  gap: 6px;
+  gap: 7px;
   align-items: center;
-  min-height: 28px;
-  padding: 3px 10px;
-  border-bottom: 1px solid var(--border-subtle);
+  min-height: 26px;
+  margin: 1px 6px;
+  padding: 2px 8px;
+  border-radius: var(--radius-row);
+  border: 0;
   cursor: pointer;
-  background: var(--panel-bg);
-  font-size: 12px;
+  background: transparent;
+  font-size: var(--fs-callout);
+  transition: background-color 120ms ease-out;
 }
 .tree-row:hover {
-  background: var(--panel-bg-muted);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .tree-row.active {
-  background: var(--accent-row);
+  background: var(--accent);
 }
+
+/* 选中态：文字、icon、checkbox 反白 */
+.file-row.active .file-path,
+.tree-row.active .file-path {
+  color: #fff;
+}
+.tree-row.active .tree-icon-dir,
+.tree-row.active .tree-icon-file,
+.tree-row.active .tree-caret {
+  color: rgba(255, 255, 255, 0.92);
+}
+.file-row.active :deep([data-state]),
+.tree-row.active :deep([data-state]) {
+  /* checkbox 在 active 行的边框/勾色微调 */
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+/* ============ 文件名 / 树元素 ============ */
 .tree-caret {
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 6px solid var(--text-muted);
+  width: 12px;
+  height: 12px;
+  color: var(--fg-muted);
+  transition: transform 140ms ease-out;
 }
-.tree-caret.collapsed {
-  transform: rotate(-90deg);
+.tree-caret.expanded {
+  transform: rotate(90deg);
 }
 .tree-caret.placeholder {
-  border: 0;
+  background: transparent;
 }
 .tree-icon {
-  position: relative;
-  display: inline-block;
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
+  flex: none;
 }
-.dir-icon {
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--folder) 78%, white);
+.tree-icon-dir {
+  color: var(--folder);
 }
-.dir-icon::before {
-  content: '';
-  position: absolute;
-  left: 1px;
-  top: -3px;
-  width: 8px;
-  height: 5px;
-  border-radius: 3px 3px 0 0;
-  background: #ffe0a3;
-}
-.file-icon {
-  border: 1px solid color-mix(in srgb, var(--file) 46%, var(--border));
-  border-radius: 3px;
-  background: var(--file-soft);
-}
-.file-icon::after {
-  content: '';
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 5px;
-  height: 1px;
-  background: color-mix(in srgb, var(--file) 56%, var(--text-muted));
-  box-shadow: 0 4px 0 color-mix(in srgb, var(--file) 56%, var(--text-muted));
-  opacity: 0.55;
-}
-.file-row:hover {
-  background: var(--panel-bg-muted);
-}
-.file-row.active {
-  background: var(--accent-row);
+.tree-icon-file {
+  color: var(--fg-muted);
 }
 .file-path {
   flex: 1;
-  font-size: 12px;
-  color: var(--text);
+  font-size: var(--fs-callout);
+  font-family: var(--mono);
+  color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.side-tabs {
-  display: flex;
-  gap: 6px;
-  min-height: 38px;
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--toolbar-bg);
+
+/* ============ 工具栏小按钮 ============ */
+.toolbar-action {
+  gap: 4px;
+  color: var(--fg-muted);
+  font-size: var(--fs-caption);
+}
+.toolbar-action:hover {
+  color: var(--fg-strong);
+}
+.icon-xs {
+  width: 12px;
+  height: 12px;
+}
+
+/* ============ Status Pill（行内 / 组标题统一）============
+   tinted pill：浅底 + 同色字 + 0.5px 同色描边 + 圆胶囊
+*/
+.status-modified,
+.status-added,
+.status-deleted,
+.status-warning,
+.status-muted {
+  display: inline-flex;
   align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  line-height: 1;
+  border-radius: var(--radius-pill);
+  border: var(--hairline) solid transparent;
+  background: var(--mat-elevated);
 }
-.hint {
-  font-size: 12px;
-  color: var(--text-muted);
+.status-modified {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
 }
+.status-added {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 32%, transparent);
+}
+.status-deleted {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 32%, transparent);
+}
+.status-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning) 34%, transparent);
+}
+.status-muted {
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-color: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+/* 选中行内的 status pill 切换为白底变体 */
+.tree-row.active .status-modified,
+.tree-row.active .status-added,
+.tree-row.active .status-deleted,
+.tree-row.active .status-warning,
+.tree-row.active .status-muted {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+/* ============ 工具栏中的语义动作色（提交/更新/Add 等）============ */
+.success-action {
+  color: var(--success);
+}
+.danger-action {
+  color: var(--danger);
+}
+.warning-action {
+  color: var(--warning);
+}
+
+/* ============ 新建文件夹 Dialog ============ */
 .folder-modal {
   width: min(520px, calc(100vw - 32px));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(26px) saturate(150%);
+  border-radius: var(--radius-window);
+  background: var(--mat-popover);
+  box-shadow: var(--shadow-modal);
+  backdrop-filter: var(--vibrancy-popover);
+  -webkit-backdrop-filter: var(--vibrancy-popover);
 }
 .folder-form {
   display: flex;
@@ -787,11 +926,11 @@ async function ignoreSelected() {
 }
 .folder-parent {
   padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--panel-bg-muted);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-  font-size: 12px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  border: var(--hairline) solid var(--stroke-soft);
+  color: var(--fg-muted);
+  font-size: var(--fs-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -800,23 +939,5 @@ async function ignoreSelected() {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-.status-added,
-.success-action {
-  color: var(--success);
-}
-.status-deleted,
-.danger-action {
-  color: var(--destructive);
-}
-.status-modified {
-  color: var(--accent);
-}
-.status-warning,
-.warning-action {
-  color: var(--warning);
-}
-.status-muted {
-  color: var(--text-muted);
 }
 </style>
