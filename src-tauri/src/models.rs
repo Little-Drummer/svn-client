@@ -99,6 +99,24 @@ pub struct SvnLogPath {
     pub copyfrom_rev: Option<u64>,
 }
 
+// 流式 status 事件载荷，按 request_id 区分不同次刷新
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum StatusStreamEvent {
+    Entries {
+        request_id: String,
+        entries: Vec<SvnStatusEntry>,
+    },
+    Finished {
+        request_id: String,
+        count: usize,
+    },
+    Failed {
+        request_id: String,
+        message: String,
+    },
+}
+
 // 长任务事件载荷
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]

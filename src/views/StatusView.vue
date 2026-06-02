@@ -1,12 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useVirtualizer } from '@tanstack/vue-virtual'
 import {
   ChevronRight,
+  Copy,
+  Eye,
   FileText,
   Folder,
   FolderOpen,
   FolderPlus,
+  FolderSearch,
+  Plus,
   RefreshCw,
+  Trash2,
+  Undo2,
+  EyeOff,
+  X,
 } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +32,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
+import ContextMenu, { type ContextMenuItem } from '@/components/ui-local/ContextMenu.vue'
 import { confirm } from '@/composables/use-confirm-dialog'
 import DiffViewer from '../components/DiffViewer.vue'
 import CommitPanel from '../components/CommitPanel.vue'
@@ -31,6 +41,7 @@ import UpdatePanel from '../components/UpdatePanel.vue'
 import { api } from '../api/svn'
 import { useStatusStore } from '../stores/status'
 import { useErrorToast } from '../composables/use-error-toast'
+import { createGeneration } from '../composables/use-request-generation'
 import type { SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry } from '../types/svn'
 
 const props = defineProps<{ workingCopy: WorkingCopyEntry }>()
@@ -44,7 +55,8 @@ const diffText = ref<string | null>(null)
 const baseContent = ref<string | null>(null)
 const currentContent = ref<string | null>(null)
 const diffLoading = ref(false)
-const showUpdate = ref(false)
+// 右侧栏按需出现：默认只看文件列表，选中文件才滑出 diff，点提交/更新才滑出对应面板
+const rightPane = ref<'none' | 'diff' | 'commit' | 'update'>('none')
 const leftMode = ref<'tree' | 'changes'>('tree')
 const fileTree = ref<WorkingCopyFileEntry[]>([])
 const fileTreeLoading = ref(false)
@@ -154,6 +166,59 @@ const flatFileTree = computed(() => {
   return rows
 })
 
+// 变更视图扁平化：把 group-header 和 entry 合成一条线性数组，便于虚拟滚动
+type ChangeRow =
+  | { kind: 'header'; item: string; label: string; className: string; count: number }
+  | { kind: 'entry'; entry: SvnStatusEntry }
+
+const flatChanges = computed<ChangeRow[]>(() => {
+  const rows: ChangeRow[] = []
+  for (const group of grouped.value) {
+    rows.push({
+      kind: 'header',
+      item: group.item,
+      label: group.label,
+      className: group.className,
+      count: group.entries.length,
+    })
+    for (const entry of group.entries) {
+      rows.push({ kind: 'entry', entry })
+    }
+  }
+  return rows
+})
+
+// ====== 虚拟滚动器 ======
+// useVirtualizer 返回 Ref<Virtualizer>；options 用 computed 包裹以响应式追踪 count
+const treeScrollRef = ref<HTMLElement | null>(null)
+const changesScrollRef = ref<HTMLElement | null>(null)
+
+const treeVirtualizer = useVirtualizer(
+  computed(() => {
+    // 显式读取 ref 让 computed 跟踪挂载/卸载，避免 leftMode 切换后 virtualizer 不重新订阅
+    const el = treeScrollRef.value
+    return {
+      count: flatFileTree.value.length,
+      getScrollElement: () => el,
+      estimateSize: () => 28,
+      overscan: 10,
+    }
+  }),
+)
+
+const changesVirtualizer = useVirtualizer(
+  computed(() => {
+    const el = changesScrollRef.value
+    return {
+      count: flatChanges.value.length,
+      getScrollElement: () => el,
+      estimateSize: (index: number) =>
+        flatChanges.value[index]?.kind === 'header' ? 34 : 30,
+      overscan: 10,
+    }
+  }),
+)
+
 function toggleAll(v: boolean) {
   if (v) {
     for (const e of allCommittable.value) checkedPaths.value.add(e.path)
@@ -167,37 +232,96 @@ function toggleEntry(e: SvnStatusEntry, v: boolean) {
   else checkedPaths.value.delete(e.path)
 }
 
+// 切 WC 时待恢复的选中文件路径——reload 完成后再去 entries 里找回实体
+let pendingSelectedFilePath: string | null = null
+
 async function reload() {
-  await statusStore.reload(props.workingCopy.path)
+  // 流式刷新：entry 分批到达即渲染；依赖完整 entries 的清理在流结束后由 watch 处理
+  await statusStore.reloadStreaming(props.workingCopy.path)
   await reloadFileTree()
-  // 清掉已经不存在的勾选
+}
+
+// 流式刷新完成（loading 由 true 变 false）后，基于完整 entries 做勾选清理与选中恢复
+function applyPostReload() {
   const exists = new Set(statusStore.entries.map((e) => e.path))
   for (const p of [...checkedPaths.value]) {
     if (!exists.has(p)) checkedPaths.value.delete(p)
   }
-  // 选中状态保留：找回当前选中文件
-  if (selectedFile.value) {
-    const found = statusStore.entries.find((e) => e.path === selectedFile.value!.path)
-    selectedFile.value = found ?? null
+  const targetPath = pendingSelectedFilePath ?? selectedFile.value?.path ?? null
+  pendingSelectedFilePath = null
+  if (targetPath) {
+    selectedFile.value = statusStore.entries.find((e) => e.path === targetPath) ?? null
   }
 }
 
+watch(
+  () => statusStore.loading,
+  (now, prev) => {
+    if (prev && !now) applyPostReload()
+  },
+)
+
+// 文件树加载的代际令牌：切 WC 时旧结果不再覆盖新数据
+const treeGen = createGeneration()
+
 async function reloadFileTree() {
+  const token = treeGen.next()
   fileTreeLoading.value = true
   try {
-    fileTree.value = await api.listWorkingCopyFiles(props.workingCopy.path)
+    const result = await api.listWorkingCopyFiles(props.workingCopy.path)
+    if (!treeGen.isCurrent(token)) return
+    fileTree.value = result
   } catch (e) {
+    if (!treeGen.isCurrent(token)) return
     toast(e, '加载文件树失败')
   } finally {
-    fileTreeLoading.value = false
+    if (treeGen.isCurrent(token)) fileTreeLoading.value = false
+  }
+}
+
+// 按 WC.id 暂存视图状态，切回时恢复——避免来回切换丢勾选/展开/选中
+type WcViewState = {
+  selectedFilePath: string | null
+  checkedPaths: Set<string>
+  expandedDirs: Set<string>
+  selectedTreePath: string | null
+  leftMode: 'tree' | 'changes'
+}
+const wcViewState = new Map<string, WcViewState>()
+
+function snapshotCurrentWc(id: string) {
+  wcViewState.set(id, {
+    selectedFilePath: selectedFile.value?.path ?? null,
+    checkedPaths: new Set(checkedPaths.value),
+    expandedDirs: new Set(expandedDirs.value),
+    selectedTreePath: selectedTreePath.value,
+    leftMode: leftMode.value,
+  })
+}
+
+function restoreWcState(id: string) {
+  // 切换工作副本后回到纯文件列表：恢复勾选/展开等，但不自动打开 diff
+  rightPane.value = 'none'
+  selectedFile.value = null
+  pendingSelectedFilePath = null
+  const saved = wcViewState.get(id)
+  if (saved) {
+    checkedPaths.value = new Set(saved.checkedPaths)
+    expandedDirs.value = new Set(saved.expandedDirs)
+    selectedTreePath.value = saved.selectedTreePath
+    leftMode.value = saved.leftMode
+  } else {
+    checkedPaths.value = new Set()
+    expandedDirs.value = new Set()
+    selectedTreePath.value = null
   }
 }
 
 watch(
   () => props.workingCopy.id,
-  () => {
-    selectedFile.value = null
-    checkedPaths.value = new Set()
+  (newId, oldId) => {
+    if (oldId) snapshotCurrentWc(oldId)
+    restoreWcState(newId)
     reload().catch(toast)
   },
   { immediate: false },
@@ -207,7 +331,11 @@ onMounted(() => {
   reload().catch(toast)
 })
 
+// diff 加载的代际令牌：快速来回点不同文件时，旧的 diff 不应覆盖新的
+const diffGen = createGeneration()
+
 watch(selectedFile, async (entry) => {
+  const token = diffGen.next()
   diffText.value = null
   baseContent.value = null
   currentContent.value = null
@@ -219,24 +347,67 @@ watch(selectedFile, async (entry) => {
   }
   diffLoading.value = true
   try {
-    diffText.value = await api.diff(entry.path)
+    const diff = await api.diff(entry.path)
+    if (!diffGen.isCurrent(token)) return
+    diffText.value = diff
     // 尝试加载左右对比所需的两份内容
     try {
-      baseContent.value = await api.baseContent(entry.path)
+      const base = await api.baseContent(entry.path)
+      if (!diffGen.isCurrent(token)) return
+      baseContent.value = base
     } catch {
-      baseContent.value = ''
+      if (diffGen.isCurrent(token)) baseContent.value = ''
     }
     try {
-      currentContent.value = await api.readFileText(entry.path)
+      const current = await api.readFileText(entry.path)
+      if (!diffGen.isCurrent(token)) return
+      currentContent.value = current
     } catch {
-      currentContent.value = ''
+      if (diffGen.isCurrent(token)) currentContent.value = ''
     }
   } catch (e) {
+    if (!diffGen.isCurrent(token)) return
     toast(e, '加载 diff 失败')
   } finally {
-    diffLoading.value = false
+    if (diffGen.isCurrent(token)) diffLoading.value = false
   }
 })
+
+// 右侧栏列宽：diff 占近一半，提交/更新固定窄栏，关闭则文件列表独占
+const gridCols = computed(() => {
+  if (rightPane.value === 'diff') return 'minmax(0, 1fr) minmax(420px, 50%)'
+  if (rightPane.value === 'commit' || rightPane.value === 'update') return 'minmax(0, 1fr) 360px'
+  return '1fr'
+})
+
+const rightTitle = computed(() => {
+  if (rightPane.value === 'diff') return selectedFile.value ? shortName(selectedFile.value.path) : '差异'
+  if (rightPane.value === 'commit') return '提交'
+  if (rightPane.value === 'update') return '更新'
+  return ''
+})
+
+// 点击文件 → 滑出 diff
+function openFileDiff(entry: SvnStatusEntry) {
+  selectedFile.value = entry
+  rightPane.value = 'diff'
+}
+
+function openCommit() {
+  rightPane.value = 'commit'
+}
+
+function openUpdate() {
+  rightPane.value = 'update'
+}
+
+function closeRight() {
+  // 关闭 diff 时清掉选中高亮，回到纯文件列表
+  if (rightPane.value === 'diff') {
+    selectedFile.value = null
+  }
+  rightPane.value = 'none'
+}
 
 function shortName(p: string) {
   // 相对工作副本根目录的相对显示，缩短面包屑长度
@@ -273,20 +444,25 @@ function selectTreeEntry(entry: WorkingCopyFileEntry) {
   if (entry.kind === 'dir') {
     toggleDir(entry)
     selectedFile.value = null
+    // 点目录回到纯列表，关掉可能开着的 diff
+    if (rightPane.value === 'diff') {
+      rightPane.value = 'none'
+    }
     return
   }
-  selectedFile.value =
+  openFileDiff(
     statusByPath.value.get(entry.path) ??
-    ({
-      path: entry.path,
-      item: 'normal',
-      props: null,
-      copied: false,
-      revision: null,
-      commitRevision: null,
-      commitAuthor: null,
-      commitDate: null,
-    } satisfies SvnStatusEntry)
+      ({
+        path: entry.path,
+        item: 'normal',
+        props: null,
+        copied: false,
+        revision: null,
+        commitRevision: null,
+        commitAuthor: null,
+        commitDate: null,
+      } satisfies SvnStatusEntry),
+  )
 }
 
 function toggleTreeCheck(entry: WorkingCopyFileEntry, checked: boolean) {
@@ -384,10 +560,122 @@ async function ignoreSelected() {
     toast(e, '忽略失败')
   }
 }
+
+// ============ 右键上下文菜单 ============
+const ctxOpen = ref(false)
+const ctxX = ref(0)
+const ctxY = ref(0)
+const ctxPath = ref<string | null>(null)
+const ctxItem = ref<string>('normal')
+
+function openRowContextMenu(event: MouseEvent, path: string, item: string) {
+  ctxPath.value = path
+  ctxItem.value = item
+  ctxX.value = event.clientX
+  ctxY.value = event.clientY
+  ctxOpen.value = true
+}
+
+// 是否纳入版本控制（用于决定可用的菜单项）
+const VERSIONED = ['modified', 'added', 'deleted', 'replaced', 'conflicted', 'missing']
+
+const ctxItems = computed<ContextMenuItem[]>(() => {
+  const item = ctxItem.value
+  const list: ContextMenuItem[] = [
+    { key: 'diff', label: '查看差异', icon: Eye },
+  ]
+  if (item === 'unversioned') {
+    list.push({ key: 'add', label: '加入版本控制', icon: Plus })
+    list.push({ key: 'ignore', label: '加入忽略', icon: EyeOff })
+  }
+  if (VERSIONED.includes(item)) {
+    list.push({ key: 'revert', label: '撤销修改', icon: Undo2, danger: true })
+  }
+  if (item !== 'unversioned' && item !== 'normal') {
+    list.push({ key: 'delete', label: '删除', icon: Trash2, danger: true })
+  }
+  list.push({ key: 'sep1', separator: true })
+  list.push({ key: 'copy', label: '复制路径', icon: Copy })
+  list.push({ key: 'reveal', label: '在 Finder 中显示', icon: FolderSearch })
+  return list
+})
+
+async function onCtxSelect(key: string) {
+  const path = ctxPath.value
+  if (!path) return
+  switch (key) {
+    case 'diff': {
+      // 选中该文件并滑出 diff，交给既有的 selectedFile 监听加载内容
+      openFileDiff(
+        statusByPath.value.get(path) ??
+          ({
+            path,
+            item: ctxItem.value as SvnStatusEntry['item'],
+            props: null,
+            copied: false,
+            revision: null,
+            commitRevision: null,
+            commitAuthor: null,
+            commitDate: null,
+          } as SvnStatusEntry),
+      )
+      break
+    }
+    case 'add':
+      await runSinglePathAction(() => api.add([path]), '加入版本控制失败')
+      break
+    case 'ignore':
+      await runSinglePathAction(() => api.ignore([path]), '忽略失败')
+      break
+    case 'revert': {
+      const ok = await confirm({
+        title: '撤销本地修改',
+        content: `该文件将恢复到 BASE 版本，本地未提交的修改会丢失：\n${path}`,
+        confirmText: '确认撤销',
+        destructive: true,
+      })
+      if (ok) await runSinglePathAction(() => api.revert([path]), '撤销失败')
+      break
+    }
+    case 'delete': {
+      const ok = await confirm({
+        title: '删除文件',
+        content: `该文件会被 svn delete 标记：\n${path}`,
+        confirmText: '确认删除',
+        destructive: true,
+      })
+      if (ok) await runSinglePathAction(() => api.delete([path]), '删除失败')
+      break
+    }
+    case 'copy':
+      try {
+        await navigator.clipboard.writeText(path)
+      } catch {
+        // 剪贴板不可用时静默，不打断操作
+      }
+      break
+    case 'reveal':
+      try {
+        await api.revealInFileManager(path)
+      } catch (e) {
+        toast(e, '无法在 Finder 中显示')
+      }
+      break
+  }
+}
+
+async function runSinglePathAction(action: () => Promise<unknown>, errMsg: string) {
+  try {
+    await action()
+    await reload()
+  } catch (e) {
+    toast(e, errMsg)
+  }
+}
 </script>
 
 <template>
-  <div class="status-view">
+  <div class="status-view" :style="{ gridTemplateColumns: gridCols }">
     <!-- 左：文件列表 -->
     <section class="file-list">
       <div class="list-toolbar">
@@ -407,7 +695,6 @@ async function ignoreSelected() {
             变更
           </Button>
         </div>
-        <span class="spacer" />
         <Button
           v-if="leftMode === 'tree'"
           size="xs"
@@ -428,161 +715,204 @@ async function ignoreSelected() {
           />
           全选
         </label>
+
+        <span class="spacer" />
+
+        <!-- 勾选文件后才出现的批量操作 -->
+        <div v-if="checkedPaths.size > 0" class="check-actions">
+          <Button
+            size="xs"
+            variant="ghost"
+            class="success-action"
+            :disabled="[...checkedPaths].every((path) => statusStore.entries.find((e) => e.path === path)?.item !== 'unversioned')"
+            @click="addSelected"
+          >
+            Add
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            :disabled="[...checkedPaths].every((path) => statusStore.entries.find((e) => e.path === path)?.item !== 'unversioned')"
+            @click="ignoreSelected"
+          >
+            忽略
+          </Button>
+          <Button size="xs" variant="ghost" class="danger-action" @click="deleteSelected">
+            删除
+          </Button>
+          <Button size="xs" variant="ghost" class="warning-action" @click="revertSelected">
+            撤销
+          </Button>
+          <span class="tool-sep" />
+        </div>
+
+        <Button
+          size="xs"
+          :variant="rightPane === 'commit' ? 'secondary' : 'ghost'"
+          class="toolbar-action"
+          @click="openCommit"
+        >
+          提交
+        </Button>
+        <Button
+          size="xs"
+          :variant="rightPane === 'update' ? 'secondary' : 'ghost'"
+          class="toolbar-action"
+          @click="openUpdate"
+        >
+          更新
+        </Button>
+        <span class="tool-sep" />
         <Switch v-model="statusStore.showUnversioned" @update:model-value="reload" />
-        <span class="hint">显示未跟踪</span>
+        <span class="hint">未跟踪</span>
         <Button size="xs" variant="ghost" class="toolbar-action" @click="reload">
           <RefreshCw class="icon-xs" />
           刷新
         </Button>
       </div>
-      <div v-if="leftMode === 'tree'" class="tree-scroll">
+      <div v-if="leftMode === 'tree'" ref="treeScrollRef" class="tree-scroll virtual-scroll">
         <LoadingSpinner v-if="fileTreeLoading" />
         <EmptyState
           v-else-if="flatFileTree.length === 0"
           description="工作副本目录为空"
         />
         <div
-          v-for="row in flatFileTree"
           v-else
-          :key="row.entry.path"
-          :class="['tree-row', { active: selectedTreePath === row.entry.path }]"
-          :style="{ paddingLeft: `${10 + row.depth * 16}px` }"
-          @click="selectTreeEntry(row.entry)"
+          class="virtual-stage"
+          :style="{ height: `${treeVirtualizer.getTotalSize()}px` }"
         >
-          <ChevronRight
-            v-if="row.entry.kind === 'dir'"
-            :class="['tree-caret', { expanded: expandedDirs.has(row.entry.path) }]"
-          />
-          <span v-else class="tree-caret placeholder" />
-          <component
-            :is="row.entry.kind === 'dir'
-              ? (expandedDirs.has(row.entry.path) ? FolderOpen : Folder)
-              : FileText"
-            :class="['tree-icon', row.entry.kind === 'dir' ? 'tree-icon-dir' : 'tree-icon-file']"
-          />
-          <Checkbox
-            :disabled="!statusByPath.has(row.entry.path) || ['normal', 'ignored', 'external'].includes(fileStatus(row.entry.path))"
-            :model-value="checkedPaths.has(row.entry.path)"
-            @update:model-value="(v) => toggleTreeCheck(row.entry, v === true)"
-            @click.stop
-          />
-          <span class="file-path mono" :title="row.entry.path">{{ row.entry.name }}</span>
-          <Badge
-            v-if="fileStatusLabel(row.entry.path)"
-            variant="outline"
-            :class="fileStatusClass(row.entry.path)"
+          <div
+            v-for="vRow in treeVirtualizer.getVirtualItems()"
+            :key="flatFileTree[vRow.index].entry.path"
+            class="virtual-slot"
+            :style="{ transform: `translateY(${vRow.start}px)`, height: `${vRow.size}px` }"
           >
-            {{ fileStatusLabel(row.entry.path) }}
-          </Badge>
+            <div
+              :class="['tree-row', 'tree-row-virt', { active: selectedTreePath === flatFileTree[vRow.index].entry.path }]"
+              :style="{ paddingLeft: `${10 + flatFileTree[vRow.index].depth * 16}px` }"
+              @click="selectTreeEntry(flatFileTree[vRow.index].entry)"
+              @contextmenu.prevent="flatFileTree[vRow.index].entry.kind === 'file'
+                && openRowContextMenu($event, flatFileTree[vRow.index].entry.path, fileStatus(flatFileTree[vRow.index].entry.path))"
+            >
+              <ChevronRight
+                v-if="flatFileTree[vRow.index].entry.kind === 'dir'"
+                :class="['tree-caret', { expanded: expandedDirs.has(flatFileTree[vRow.index].entry.path) }]"
+              />
+              <span v-else class="tree-caret placeholder" />
+              <component
+                :is="flatFileTree[vRow.index].entry.kind === 'dir'
+                  ? (expandedDirs.has(flatFileTree[vRow.index].entry.path) ? FolderOpen : Folder)
+                  : FileText"
+                :class="['tree-icon', flatFileTree[vRow.index].entry.kind === 'dir' ? 'tree-icon-dir' : 'tree-icon-file']"
+              />
+              <Checkbox
+                :disabled="!statusByPath.has(flatFileTree[vRow.index].entry.path) || ['normal', 'ignored', 'external'].includes(fileStatus(flatFileTree[vRow.index].entry.path))"
+                :model-value="checkedPaths.has(flatFileTree[vRow.index].entry.path)"
+                @update:model-value="(v) => toggleTreeCheck(flatFileTree[vRow.index].entry, v === true)"
+                @click.stop
+              />
+              <span class="file-path mono" :title="flatFileTree[vRow.index].entry.path">
+                {{ flatFileTree[vRow.index].entry.name }}
+              </span>
+              <Badge
+                v-if="fileStatusLabel(flatFileTree[vRow.index].entry.path)"
+                variant="outline"
+                :class="fileStatusClass(flatFileTree[vRow.index].entry.path)"
+              >
+                {{ fileStatusLabel(flatFileTree[vRow.index].entry.path) }}
+              </Badge>
+            </div>
+          </div>
         </div>
       </div>
-      <div v-else class="list-scroll">
+      <div v-else ref="changesScrollRef" class="list-scroll virtual-scroll">
         <LoadingSpinner v-if="statusStore.loading" />
         <EmptyState
-          v-else-if="grouped.length === 0"
+          v-else-if="flatChanges.length === 0"
           description="工作区干净，没有变更"
         />
-        <div v-for="group in grouped" :key="group.item" class="group">
-          <div class="group-header">
-            <Badge variant="outline" :class="group.className">{{ group.label }}</Badge>
-            <span class="group-count mono">{{ group.entries.length }}</span>
-          </div>
-          <div
-            v-for="e in group.entries"
-            :key="e.path"
-            :class="['file-row', { active: selectedFile?.path === e.path }]"
-            @click="selectedFile = e"
-          >
-            <Checkbox
-              :disabled="e.item === 'normal' || e.item === 'ignored' || e.item === 'external'"
-              :model-value="checkedPaths.has(e.path)"
-              @update:model-value="(v) => toggleEntry(e, v === true)"
-              @click.stop
-            />
-            <span class="file-path mono" :title="e.path">{{ shortName(e.path) }}</span>
-          </div>
+        <div
+          v-else
+          class="virtual-stage"
+          :style="{ height: `${changesVirtualizer.getTotalSize()}px` }"
+        >
+          <template v-for="vRow in changesVirtualizer.getVirtualItems()" :key="vRow.index">
+            <div
+              v-if="flatChanges[vRow.index].kind === 'header'"
+              class="virtual-slot"
+              :style="{ transform: `translateY(${vRow.start}px)`, height: `${vRow.size}px` }"
+            >
+              <div class="group-header">
+                <Badge variant="outline" :class="(flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'header' }>).className">
+                  {{ (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'header' }>).label }}
+                </Badge>
+                <span class="group-count mono">{{ (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'header' }>).count }}</span>
+              </div>
+            </div>
+            <div
+              v-else
+              class="virtual-slot"
+              :style="{ transform: `translateY(${vRow.start}px)`, height: `${vRow.size}px` }"
+            >
+              <div
+                :class="['file-row', 'file-row-virt', { active: selectedFile?.path === (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path }]"
+                @click="openFileDiff((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry)"
+                @contextmenu.prevent="openRowContextMenu(
+                  $event,
+                  (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path,
+                  (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item,
+                )"
+              >
+                <Checkbox
+                  :disabled="['normal', 'ignored', 'external'].includes((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item)"
+                  :model-value="checkedPaths.has((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path)"
+                  @update:model-value="(v) => toggleEntry((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry, v === true)"
+                  @click.stop
+                />
+                <span
+                  class="file-path mono"
+                  :title="(flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path"
+                >
+                  {{ shortName((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path) }}
+                </span>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
     </section>
 
-    <!-- 中：diff -->
-    <section class="diff-pane">
-      <DiffViewer
-        :diff-text="diffText"
-        :base-content="baseContent"
-        :current-content="currentContent"
-        :filename="selectedFile?.path"
-        :loading="diffLoading"
-      />
-    </section>
-
-    <!-- 右：commit/update 面板 -->
-    <section class="side-pane">
-      <div class="side-tabs">
-        <Button
-          size="sm"
-          :variant="!showUpdate ? 'secondary' : 'ghost'"
-          @click="showUpdate = false"
-        >
-          提交
-        </Button>
-        <Button
-          size="sm"
-          :variant="showUpdate ? 'secondary' : 'ghost'"
-          @click="showUpdate = true"
-        >
-          更新
-        </Button>
-        <span class="spacer" />
-        <Button
-          size="sm"
-          variant="ghost"
-          class="success-action"
-          :disabled="[...checkedPaths].every((path) => statusStore.entries.find((e) => e.path === path)?.item !== 'unversioned')"
-          @click="addSelected"
-        >
-          Add
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          :disabled="[...checkedPaths].every((path) => statusStore.entries.find((e) => e.path === path)?.item !== 'unversioned')"
-          @click="ignoreSelected"
-        >
-          忽略
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          class="danger-action"
-          :disabled="checkedPaths.size === 0"
-          @click="deleteSelected"
-        >
-          删除
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          class="warning-action"
-          :disabled="checkedPaths.size === 0"
-          @click="revertSelected"
-        >
-          撤销
-        </Button>
+    <!-- 右侧按需栏：diff / 提交 / 更新，可关闭 -->
+    <aside v-if="rightPane !== 'none'" class="right-pane">
+      <div class="right-head">
+        <span class="right-title" :title="selectedFile?.path">{{ rightTitle }}</span>
+        <button class="right-close" type="button" title="关闭" @click="closeRight">
+          <X class="icon-xs" />
+        </button>
       </div>
-      <CommitPanel
-        v-if="!showUpdate"
-        :working-copy="workingCopy"
-        :checked-paths="checkedCommittablePaths"
-        @done="reload"
-      />
-      <UpdatePanel
-        v-else
-        :working-copy="workingCopy"
-        :checked-paths="[...checkedPaths]"
-        @done="reload"
-      />
-    </section>
+      <div class="right-body">
+        <DiffViewer
+          v-if="rightPane === 'diff'"
+          :diff-text="diffText"
+          :base-content="baseContent"
+          :current-content="currentContent"
+          :filename="selectedFile?.path"
+          :loading="diffLoading"
+        />
+        <CommitPanel
+          v-else-if="rightPane === 'commit'"
+          :working-copy="workingCopy"
+          :checked-paths="checkedCommittablePaths"
+          @done="reload"
+        />
+        <UpdatePanel
+          v-else-if="rightPane === 'update'"
+          :working-copy="workingCopy"
+          :checked-paths="[...checkedPaths]"
+          @done="reload"
+        />
+      </div>
+    </aside>
 
     <Dialog v-model:open="showCreateFolder">
       <DialogContent class="folder-modal">
@@ -609,6 +939,14 @@ async function ignoreSelected() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <ContextMenu
+      v-model:open="ctxOpen"
+      :x="ctxX"
+      :y="ctxY"
+      :items="ctxItems"
+      @select="onCtxSelect"
+    />
   </div>
 </template>
 
@@ -616,41 +954,105 @@ async function ignoreSelected() {
 /* ============ 三栏容器 ============ */
 .status-view {
   display: grid;
-  grid-template-columns: 320px 1fr 340px;
+  /* 列宽由 :style 绑定的 gridCols 控制：纯列表 1fr，或列表 + 右侧按需栏 */
+  grid-template-columns: 1fr;
   height: 100%;
   min-height: 0;
   background: var(--mat-content);
 }
 .file-list,
-.diff-pane,
-.side-pane {
+.right-pane {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
 }
-.file-list {
-  border-right: var(--hairline) solid var(--stroke-soft);
-}
-.side-pane {
+.right-pane {
   border-left: var(--hairline) solid var(--stroke-soft);
+  overflow: hidden;
 }
 
-/* ============ 顶部工具条（list-toolbar / side-tabs）============ */
-.list-toolbar,
-.side-tabs {
+/* ============ 右侧按需栏头部 ============ */
+.right-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 10px;
+  flex: none;
+  min-height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  background: var(--mat-toolbar);
+  backdrop-filter: var(--vibrancy-toolbar);
+  -webkit-backdrop-filter: var(--vibrancy-toolbar);
+}
+.right-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-callout);
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.right-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.right-close:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+.right-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.right-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ============ 顶部工具条 ============ */
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   height: 36px;
   flex: none;
   padding: 0 10px;
   border-bottom: var(--hairline) solid var(--stroke-soft);
   background: transparent;
   font-size: var(--fs-callout);
+  overflow: hidden;
 }
 .spacer {
   flex: 1;
+}
+.check-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.tool-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--stroke-soft);
+  margin: 0 3px;
+  flex: none;
 }
 .hint {
   font-size: var(--fs-caption);
@@ -716,6 +1118,33 @@ async function ignoreSelected() {
   min-height: 0;
   overflow: auto;
   padding: 4px 0;
+}
+
+/* ============ 虚拟滚动布局 ============ */
+.virtual-scroll {
+  position: relative;
+}
+.virtual-stage {
+  position: relative;
+  width: 100%;
+}
+.virtual-slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0 6px;
+  display: flex;
+  align-items: stretch;
+}
+.virtual-slot > * {
+  flex: 1;
+  min-width: 0;
+}
+/* 虚拟行覆盖原 margin（margin 在绝对定位里会导致计算偏差） */
+.tree-row-virt,
+.file-row-virt {
+  margin: 0 !important;
 }
 
 /* ============ 分组（变更视图）============ */

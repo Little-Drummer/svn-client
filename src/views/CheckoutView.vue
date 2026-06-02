@@ -3,7 +3,6 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { computed, ref, watch } from 'vue'
 
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAppToast } from '@/composables/use-app-toast'
@@ -45,22 +44,40 @@ async function start() {
     return
   }
   try {
-    const id = await api.startCheckout({
+    taskId.value = await launchCheckout({
       url: url.value.trim(),
       targetPath: targetPath.value.trim(),
       revision: revision.value || undefined,
       username: username.value || undefined,
       password: password.value || undefined,
     })
-    tasksStore.register({
-      taskId: id,
-      kind: 'checkout',
-      title: `检出 ${url.value} → ${targetPath.value}`,
-    })
-    taskId.value = id
   } catch (e) {
     toast.error('启动检出失败', describeError(e))
   }
+}
+
+async function launchCheckout(params: {
+  url: string
+  targetPath: string
+  revision?: string
+  username?: string
+  password?: string
+}): Promise<string> {
+  const id = await api.startCheckout(params)
+  // 等价命令行：密码打码，避免泄露到界面
+  const parts = ['svn', 'checkout']
+  if (params.revision) parts.push('-r', params.revision)
+  if (params.username) parts.push('--username', params.username)
+  if (params.password) parts.push('--password', '••••••')
+  parts.push(params.url, params.targetPath)
+  tasksStore.register({
+    taskId: id,
+    kind: 'checkout',
+    title: `检出 ${params.url} → ${params.targetPath}`,
+    command: parts.join(' '),
+    retry: () => launchCheckout(params),
+  })
+  return id
 }
 
 watch(
@@ -93,14 +110,14 @@ watch(
 
 <template>
   <div class="checkout-view">
-    <Card class="card">
-      <CardHeader class="card-head">
-        <CardTitle>检出 (svn checkout)</CardTitle>
-      </CardHeader>
-      <CardContent>
+    <section class="card">
+      <header class="card-head">
+        <h2 class="card-title">检出 (svn checkout)</h2>
+        <span class="card-hint">从远端 URL 拉取一份本地副本</span>
+      </header>
       <div class="checkout-form">
         <div class="form-row">
-          <Label for="checkout-url">远端 URL</Label>
+          <Label for="checkout-url" class="form-label">远端 URL</Label>
           <Input
             id="checkout-url"
             v-model="url"
@@ -109,7 +126,7 @@ watch(
           />
         </div>
         <div class="form-row">
-          <Label for="checkout-target">本地目录</Label>
+          <Label for="checkout-target" class="form-label">本地目录</Label>
           <div class="input-group">
             <Input
               id="checkout-target"
@@ -121,15 +138,15 @@ watch(
           </div>
         </div>
         <div class="form-row">
-          <Label for="checkout-revision">Revision</Label>
+          <Label for="checkout-revision" class="form-label">Revision</Label>
           <Input id="checkout-revision" v-model="revision" placeholder="留空 = HEAD" :disabled="running" />
         </div>
         <div class="form-row">
-          <Label for="checkout-username">用户名</Label>
+          <Label for="checkout-username" class="form-label">用户名</Label>
           <Input id="checkout-username" v-model="username" placeholder="可选" :disabled="running" />
         </div>
         <div class="form-row">
-          <Label for="checkout-password">密码</Label>
+          <Label for="checkout-password" class="form-label">密码</Label>
           <Input
             id="checkout-password"
             v-model="password"
@@ -142,11 +159,10 @@ watch(
           <Button :disabled="running" @click="start">{{ running ? '检出中' : '开始检出' }}</Button>
         </div>
       </div>
-      </CardContent>
-    </Card>
+    </section>
 
     <div class="output-wrap">
-      <TaskOutput :task-id="taskId" />
+      <TaskOutput :task-id="taskId" @retried="taskId = $event" />
     </div>
   </div>
 </template>
@@ -157,33 +173,54 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 12px;
-  gap: 12px;
-  background: var(--panel-bg-muted);
+  padding: 16px;
+  gap: 14px;
+  background: var(--mat-window);
+  overflow: auto;
 }
 .card {
   flex-shrink: 0;
-  border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--panel-bg);
-  box-shadow: none;
+  background: var(--mat-elevated);
+  box-shadow:
+    inset 0 0 0 0.5px var(--stroke),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+  padding: 16px 18px 14px;
 }
 .card-head {
-  padding: 14px 16px 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+}
+.card-title {
+  margin: 0;
+  font-size: var(--fs-headline);
+  font-weight: 600;
+  color: var(--fg-strong);
+  letter-spacing: -0.01em;
+}
+.card-hint {
+  font-size: var(--fs-callout);
+  color: var(--fg-muted);
 }
 .checkout-form {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 .form-row {
   display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
+  grid-template-columns: 92px minmax(0, 1fr);
   gap: 12px;
   align-items: center;
 }
-.form-row label {
-  color: var(--text-muted);
-  font-size: 12px;
+.form-label {
+  color: var(--fg-muted);
+  font-size: var(--fs-callout);
+  font-weight: 500;
+  text-align: right;
 }
 .input-group {
   display: grid;
@@ -193,15 +230,18 @@ watch(
 .form-actions {
   display: flex;
   justify-content: flex-end;
+  margin-top: 4px;
 }
 .output-wrap {
   flex: 1;
-  min-height: 0;
+  min-height: 220px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--panel-bg);
+  border-radius: 10px;
+  background: var(--mat-elevated);
+  box-shadow:
+    inset 0 0 0 0.5px var(--stroke),
+    0 1px 2px rgba(0, 0, 0, 0.04);
 }
 </style>

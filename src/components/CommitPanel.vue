@@ -56,16 +56,23 @@ async function submit() {
   })
   if (!ok) return
   try {
-    const id = await api.startCommit(paths, message.value.trim())
-    tasksStore.register({
-      taskId: id,
-      kind: 'commit',
-      title: `提交 ${paths.length} 个文件`,
-    })
-    taskId.value = id
+    taskId.value = await launchCommit(paths, message.value.trim())
   } catch (e) {
     toast(e, '启动提交失败')
   }
+}
+
+// 启动提交并注册任务，retry 指回自身以便失败后用相同参数重跑
+async function launchCommit(paths: string[], msg: string): Promise<string> {
+  const id = await api.startCommit(paths, msg)
+  tasksStore.register({
+    taskId: id,
+    kind: 'commit',
+    title: `提交 ${paths.length} 个文件`,
+    command: `svn commit -m ${JSON.stringify(msg)} ${paths.join(' ')}`,
+    retry: () => launchCommit(paths, msg),
+  })
+  return id
 }
 
 watch(
@@ -90,7 +97,8 @@ watch(
         <EmptyState description="勾选左侧文件后再提交" />
       </template>
       <template v-else>
-        <div class="hint">已勾选 {{ checkedPaths.length }} 个文件</div>
+        <span class="summary-count">{{ checkedPaths.length }}</span>
+        <span class="summary-label">个文件待提交</span>
       </template>
     </div>
 
@@ -110,7 +118,7 @@ watch(
       </Button>
     </div>
 
-    <TaskOutput :task-id="taskId" />
+    <TaskOutput :task-id="taskId" @retried="taskId = $event" />
   </div>
 </template>
 
@@ -121,14 +129,24 @@ watch(
   height: 100%;
   min-height: 0;
   gap: 10px;
-  padding: 10px;
-  background: var(--panel-bg-subtle);
+  padding: 12px;
+  background: var(--mat-content);
 }
 .summary {
-  font-size: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--fs-body);
+  min-height: 22px;
 }
-.hint {
-  color: var(--text-muted);
+.summary-count {
+  font-size: var(--fs-headline);
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.summary-label {
+  color: var(--fg-muted);
 }
 .commit-message {
   min-height: 116px;

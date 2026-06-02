@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RefreshCw } from 'lucide-vue-next'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 
 import WorkingCopyList from '../components/WorkingCopyList.vue'
 import RepositoryList from '../components/RepositoryList.vue'
@@ -15,13 +17,50 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAppToast } from '@/composables/use-app-toast'
+import { useRepositoriesStore } from '../stores/repositories'
 import { useWorkingCopiesStore } from '../stores/workingCopies'
+import { useTasksStore } from '../stores/tasks'
 import { api, describeError } from '../api/svn'
 import type { RepositoryEntry } from '../types/svn'
 
+const repoStore = useRepositoriesStore()
 const wcStore = useWorkingCopiesStore()
+const tasksStore = useTasksStore()
 const tab = ref<'status' | 'log' | 'remote' | 'checkout'>('status')
 const toast = useAppToast()
+
+// 侧栏「远端仓库」区高度可拖拽调整：远端少、本地多时把空间让给工作副本列表
+const REPO_PANE_KEY = 'sidebar.repoPaneHeight'
+const sidebarRef = ref<HTMLElement | null>(null)
+const repoPaneHeight = ref<number>(Number(localStorage.getItem(REPO_PANE_KEY)) || 260)
+const resizingSidebar = ref(false)
+
+function startSidebarResize(e: MouseEvent) {
+  e.preventDefault()
+  resizingSidebar.value = true
+  const startY = e.clientY
+  const startH = repoPaneHeight.value
+  const sidebarH = sidebarRef.value?.clientHeight ?? 640
+  const MIN = 120
+  // 上限：扣掉顶部 chrome 与工作副本区的最小可视高度，避免把下方挤没
+  const MAX = Math.max(MIN, sidebarH - 52 - 160)
+
+  function onMove(ev: MouseEvent) {
+    repoPaneHeight.value = Math.min(MAX, Math.max(MIN, startH + (ev.clientY - startY)))
+  }
+  function onUp() {
+    resizingSidebar.value = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    localStorage.setItem(REPO_PANE_KEY, String(Math.round(repoPaneHeight.value)))
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  document.body.style.cursor = 'row-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
 
 const svnVersion = ref<string | null>(null)
 const svnError = ref<string | null>(null)
@@ -38,8 +77,58 @@ async function detectSvn() {
   }
 }
 
-onMounted(() => {
+// 原生菜单与窗口拖拽的清理句柄
+let unlistenMenu: UnlistenFn | null = null
+let unlistenDrop: (() => void) | null = null
+
+onMounted(async () => {
   detectSvn()
+
+  // 原生应用菜单的「视图/刷新」项通过 menu-action 事件驱动前端
+  unlistenMenu = await listen<string>('menu-action', (event) => {
+    const id = event.payload
+    switch (id) {
+      case 'view:status':
+        tab.value = 'status'
+        break
+      case 'view:log':
+        tab.value = 'log'
+        break
+      case 'view:remote':
+        tab.value = 'remote'
+        break
+      case 'view:checkout':
+        tab.value = 'checkout'
+        break
+      case 'action:refresh':
+        refreshSelected()
+        break
+    }
+  })
+
+  // 拖拽文件夹到窗口即尝试添加为工作副本
+  unlistenDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
+    if (event.payload.type !== 'drop') return
+    const paths = event.payload.paths ?? []
+    let added = 0
+    for (const p of paths) {
+      try {
+        await wcStore.add(p)
+        added += 1
+      } catch (e) {
+        toast.error('无法添加', describeError(e))
+      }
+    }
+    if (added > 0) {
+      tab.value = 'status'
+      toast.success(`已添加 ${added} 个工作副本`)
+    }
+  })
+})
+
+onUnmounted(() => {
+  unlistenMenu?.()
+  unlistenDrop?.()
 })
 
 const selected = computed(() => wcStore.selected)
@@ -82,20 +171,39 @@ async function refreshSelected() {
 function checkoutRepository(repo: RepositoryEntry) {
   checkoutRepo.value = repo
   tab.value = 'checkout'
+  repoStore.select(repo.id)
 }
 
 function browseRepository(repo: RepositoryEntry) {
   browseRepo.value = repo
   tab.value = 'remote'
+  repoStore.select(repo.id)
+}
+
+function onWorkingCopySelect() {
+  repoStore.select(null)
+  if (tab.value === 'remote' || tab.value === 'checkout') {
+    tab.value = 'status'
+  }
 }
 </script>
 
 <template>
   <div class="layout">
-    <aside class="sidebar">
+    <aside ref="sidebarRef" class="sidebar">
       <div class="sidebar-chrome" data-tauri-drag-region />
-      <RepositoryList @checkout="checkoutRepository" @browse="browseRepository" />
-      <WorkingCopyList />
+      <RepositoryList
+        class="repo-pane"
+        :style="{ height: `${repoPaneHeight}px` }"
+        @checkout="checkoutRepository"
+        @browse="browseRepository"
+      />
+      <div
+        class="sidebar-resizer"
+        :class="{ resizing: resizingSidebar }"
+        @mousedown="startSidebarResize"
+      />
+      <WorkingCopyList :show-active="tab === 'status' || tab === 'log'" @select="onWorkingCopySelect" />
     </aside>
 
     <main class="main">
@@ -141,20 +249,21 @@ function browseRepository(repo: RepositoryEntry) {
 
       <EnvWarning v-if="svnError" :message="svnError" @retry="detectSvn" />
 
-      <!-- 内容区：tabs 内容直接铺满，不再共用顶部 tabs 条 -->
+      <!-- 内容区：force-mount 让四个 tab 持续挂载，切换不重建。 -->
+      <!-- 非活跃 tab 通过 [data-state='inactive'] { display:none } 隐藏。 -->
       <Tabs v-model="tab" class="content-tabs">
-        <TabsContent value="status" class="tab-pane">
+        <TabsContent value="status" class="tab-pane" force-mount>
           <StatusView v-if="selected" :working-copy="selected" />
           <div v-else class="empty-pane">先在左侧添加并选择一个工作副本</div>
         </TabsContent>
-        <TabsContent value="log" class="tab-pane">
+        <TabsContent value="log" class="tab-pane" force-mount>
           <LogView v-if="selected" :working-copy="selected" />
           <div v-else class="empty-pane">先在左侧添加并选择一个工作副本</div>
         </TabsContent>
-        <TabsContent value="remote" class="tab-pane">
+        <TabsContent value="remote" class="tab-pane" force-mount>
           <RemoteBrowserView :repository="browseRepo" @checkout="checkoutRepository" />
         </TabsContent>
-        <TabsContent value="checkout" class="tab-pane">
+        <TabsContent value="checkout" class="tab-pane" force-mount>
           <CheckoutView :repository="checkoutRepo" />
         </TabsContent>
       </Tabs>
@@ -180,6 +289,12 @@ function browseRepository(repo: RepositoryEntry) {
         </TooltipProvider>
         <span v-else-if="svnError" class="statusbar-text statusbar-err">svn 不可用</span>
         <span v-else class="statusbar-text statusbar-muted">检测 svn 中…</span>
+
+        <span class="statusbar-spacer" />
+        <span v-if="tasksStore.runningCount > 0" class="statusbar-text statusbar-task">
+          <span class="task-dot" />
+          {{ tasksStore.runningCount }} 个任务运行中
+        </span>
       </footer>
     </main>
   </div>
@@ -213,6 +328,38 @@ function browseRepository(repo: RepositoryEntry) {
   flex: none;
   border-bottom: var(--hairline) solid var(--stroke-soft);
   background: transparent;
+}
+
+/* 远端仓库区：高度交给拖拽变量控制，覆盖组件自身的 flex/百分比约束 */
+.sidebar .repo-pane {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* 可拖拽分隔条：平时只露一条细线，hover / 拖拽时高亮 */
+.sidebar-resizer {
+  flex: none;
+  height: 9px;
+  margin-top: -5px;
+  cursor: row-resize;
+  position: relative;
+  z-index: 2;
+}
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: transparent;
+  transition: background-color 120ms ease-out;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer.resizing::after {
+  background: var(--accent);
 }
 
 /* ============ Main ============ */
@@ -420,6 +567,22 @@ function browseRepository(repo: RepositoryEntry) {
 }
 .statusbar-muted {
   color: var(--fg-muted);
+}
+.statusbar-spacer {
+  flex: 1;
+}
+.statusbar-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+}
+.task-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes pulse {

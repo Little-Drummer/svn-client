@@ -30,18 +30,23 @@ async function start() {
       props.checkedPaths && props.checkedPaths.length === 1
         ? props.checkedPaths[0]
         : props.workingCopy.path
-    const id = await api.startUpdate(target, revision.value || undefined)
-    tasksStore.register({
-      taskId: id,
-      kind: 'update',
-      title: `更新 ${props.checkedPaths?.length === 1 ? '选中文件' : '整个工作副本'} 到 ${
-        revision.value || 'HEAD'
-      }`,
-    })
-    taskId.value = id
+    taskId.value = await launchUpdate(target, revision.value || undefined)
   } catch (e) {
     toast(e, '启动更新失败')
   }
+}
+
+async function launchUpdate(target: string, rev: string | undefined): Promise<string> {
+  const id = await api.startUpdate(target, rev)
+  const single = props.checkedPaths?.length === 1
+  tasksStore.register({
+    taskId: id,
+    kind: 'update',
+    title: `更新 ${single ? '选中文件' : '整个工作副本'} 到 ${rev || 'HEAD'}`,
+    command: `svn update${rev ? ` -r ${rev}` : ''} ${target}`,
+    retry: () => launchUpdate(target, rev),
+  })
+  return id
 }
 
 watch(
@@ -56,7 +61,7 @@ watch(
   <div class="update-panel">
     <div class="row">
       <span class="label">范围</span>
-      <span class="target mono">
+      <span class="target mono" :title="checkedPaths?.length === 1 ? checkedPaths[0] : workingCopy.path">
         {{ checkedPaths?.length === 1 ? checkedPaths[0] : workingCopy.path }}
       </span>
     </div>
@@ -69,7 +74,6 @@ watch(
               v-model="revision"
               placeholder="留空 = HEAD"
               :disabled="running"
-              class="h-8"
             />
           </TooltipTrigger>
           <TooltipContent>可填具体 revision、HEAD、{2025-01-01} 等</TooltipContent>
@@ -79,7 +83,7 @@ watch(
     <div class="actions">
       <Button :disabled="running" @click="start">{{ running ? '更新中' : '更新' }}</Button>
     </div>
-    <TaskOutput :task-id="taskId" />
+    <TaskOutput :task-id="taskId" @retried="taskId = $event" />
   </div>
 </template>
 
@@ -89,19 +93,20 @@ watch(
   flex-direction: column;
   height: 100%;
   gap: 10px;
-  padding: 10px;
+  padding: 12px;
   min-height: 0;
-  background: var(--panel-bg-subtle);
+  background: var(--mat-content);
 }
 .row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
 }
 .label {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--fs-callout);
+  color: var(--fg-muted);
   min-width: 64px;
+  font-weight: 500;
 }
 .actions {
   display: flex;
@@ -110,8 +115,8 @@ watch(
 .target {
   min-width: 0;
   flex: 1;
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--fs-callout);
+  color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

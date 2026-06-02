@@ -15,13 +15,37 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import { confirm } from '@/composables/use-confirm-dialog'
 import { useWorkingCopiesStore } from '../stores/workingCopies'
+import { useRepositoriesStore } from '../stores/repositories'
 import { useErrorToast } from '../composables/use-error-toast'
 
+const props = withDefaults(defineProps<{ showActive?: boolean }>(), { showActive: true })
+
+const emit = defineEmits<{
+  select: [id: string]
+}>()
+
 const store = useWorkingCopiesStore()
+const repoStore = useRepositoriesStore()
 const toast = useErrorToast()
 
 const items = computed(() => store.items)
 const collapsedRoots = ref<Set<string>>(new Set())
+
+function normalizeUrl(u: string) {
+  return u.replace(/\/+$/, '')
+}
+
+// 若该远端 root 命中已添加的仓库配置（互为前缀视为同源），用用户起的仓库名做分组标题
+function repoNameForRoot(root: string): string | null {
+  const r = normalizeUrl(root)
+  for (const repo of repoStore.items) {
+    const u = normalizeUrl(repo.url)
+    if (u === r || u.startsWith(`${r}/`) || r.startsWith(`${u}/`)) {
+      return repo.name
+    }
+  }
+  return null
+}
 
 const groups = computed(() => {
   const map = new Map<string, { root: string; copies: typeof store.items }>()
@@ -30,7 +54,9 @@ const groups = computed(() => {
     if (!map.has(root)) map.set(root, { root, copies: [] })
     map.get(root)!.copies.push(wc)
   }
-  return [...map.values()].sort((a, b) => a.root.localeCompare(b.root))
+  return [...map.values()]
+    .map((g) => ({ ...g, label: repoNameForRoot(g.root) ?? rootLabel(g.root) }))
+    .sort((a, b) => a.label.localeCompare(b.label))
 })
 
 onMounted(() => {
@@ -85,6 +111,11 @@ function rootLabel(root: string) {
   }
 }
 
+function selectWc(id: string) {
+  store.select(id)
+  emit('select', id)
+}
+
 function toggleRoot(root: string) {
   const next = new Set(collapsedRoots.value)
   if (next.has(root)) next.delete(root)
@@ -112,15 +143,15 @@ function toggleRoot(root: string) {
             :class="['root-chevron', { collapsed: collapsedRoots.has(group.root) }]"
           />
           <FolderGit2 class="root-icon" />
-          <span class="root-name" :title="group.root">{{ rootLabel(group.root) }}</span>
+          <span class="root-name" :title="group.root">{{ group.label }}</span>
           <span class="root-count mono">{{ group.copies.length }}</span>
         </button>
         <div v-if="!collapsedRoots.has(group.root)" class="copy-list">
           <div
             v-for="wc in group.copies"
             :key="wc.id"
-            :class="['wc-item', { active: wc.id === store.selectedId }]"
-            @click="store.select(wc.id)"
+            :class="['wc-item', { active: props.showActive && wc.id === store.selectedId }]"
+            @click="selectWc(wc.id)"
           >
             <div class="wc-row-main">
               <HardDrive class="wc-icon" />

@@ -471,6 +471,14 @@ code,
   }
   body {
     @apply bg-background text-foreground;
+    /* 主题切换时让背景色 / 文本色平滑过渡，模仿 macOS Big Sur+ 行为 */
+    transition: background-color 220ms ease-out, color 220ms ease-out;
+  }
+  /* 让所有控件继承"自然光标"——按钮不要 i-beam，输入框保留 text */
+  button,
+  [role='button'],
+  [data-tauri-drag-region] {
+    cursor: default;
   }
 }
 
@@ -613,5 +621,67 @@ code,
   .ctl-input:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+}
+
+/* ============ Motion: 全局轻量动效 ============
+ * 关键原则：只用 transform + opacity，避免 layout 抖动；
+ * 时长 ≤220ms，曲线统一 cubic-bezier(0.32, 0.72, 0, 1)（macOS 标准 ease-out）。
+ */
+
+/* Tabs / 视图切换 —— 激活面板做 4px 上推 + 淡入 */
+[data-state='active'].tab-pane,
+[data-state='active'].tab-fade {
+  animation: tab-enter 220ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+@keyframes tab-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 列表行 / 卡片 hover 微提升（不抖父级） */
+.row-hover-lift {
+  transition:
+    background-color 140ms ease-out,
+    box-shadow 160ms ease-out,
+    transform 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.row-hover-lift:hover {
+  transform: translateY(-0.5px);
+}
+
+/* Toast / Popover 入场（如有需要可加 .pop-in） */
+.pop-in {
+  animation: pop-in 180ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* prefers-reduced-motion：禁用 transform 动画，仅保留即时切换 */
+@media (prefers-reduced-motion: reduce) {
+  [data-state='active'].tab-pane,
+  [data-state='active'].tab-fade,
+  .pop-in {
+    animation: none;
+  }
+  .row-hover-lift {
+    transition: background-color 100ms linear;
+  }
+  .row-hover-lift:hover {
+    transform: none;
   }
 }

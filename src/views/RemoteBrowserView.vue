@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ChevronRight, Folder, FileText, X } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -151,17 +152,14 @@ watch(
         <Button size="sm" variant="outline" @click="load(manualUrl)">打开</Button>
       </div>
 
-      <div class="crumbs">
-        <button
-          v-for="crumb in crumbs"
-          :key="crumb.url"
-          class="crumb"
-          type="button"
-          @click="load(crumb.url)"
-        >
-          {{ crumb.label }}
-        </button>
-      </div>
+      <nav class="crumbs">
+        <template v-for="(crumb, idx) in crumbs" :key="crumb.url">
+          <ChevronRight v-if="idx > 0" class="crumb-sep" />
+          <button class="crumb" type="button" @click="load(crumb.url)">
+            {{ crumb.label }}
+          </button>
+        </template>
+      </nav>
 
       <div :class="['browser-body', { 'preview-open': previewOpen }]">
         <section class="remote-list">
@@ -183,13 +181,15 @@ watch(
                 @click="selectEntry(entry)"
                 @dblclick="previewEntry(entry)"
               >
-                <span :class="['entry-icon', entry.kind === 'dir' ? 'dir-icon' : 'file-icon']" />
-                <span class="name mono" :title="entry.url">{{ entry.name }}</span>
+                <component
+                  :is="entry.kind === 'dir' ? Folder : FileText"
+                  :class="['entry-icon', entry.kind === 'dir' ? 'is-dir' : 'is-file']"
+                />
+                <span class="name" :title="entry.url">{{ entry.name }}</span>
                 <span class="size mono">{{ formatSize(entry.size) }}</span>
-                <span class="rev mono" v-if="entry.revision">r{{ entry.revision }}</span>
-                <span v-else class="rev mono" />
+                <span class="rev mono">{{ entry.revision ? `r${entry.revision}` : '' }}</span>
                 <span class="author mono">{{ entry.author ?? '' }}</span>
-                <span class="date">{{ formatDate(entry.date) }}</span>
+                <span class="date mono">{{ formatDate(entry.date) }}</span>
               </div>
             </template>
           </div>
@@ -197,8 +197,10 @@ watch(
 
         <section v-if="previewOpen" class="preview">
           <div class="preview-head">
-            <span class="mono" :title="selected?.url">{{ selected?.name ?? '文件预览' }}</span>
-            <Button size="xs" variant="ghost" @click="closePreview">关闭</Button>
+            <span class="mono preview-title" :title="selected?.url">{{ selected?.name ?? '文件预览' }}</span>
+            <button class="preview-close" type="button" @click="closePreview">
+              <X class="icon-sm" />
+            </button>
           </div>
           <LoadingSpinner v-if="contentLoading" />
           <pre v-else-if="fileContent" class="file-content mono">{{ fileContent }}</pre>
@@ -215,7 +217,7 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--panel-bg);
+  background: var(--mat-content);
 }
 .browser-toolbar,
 .url-row,
@@ -223,9 +225,18 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--toolbar-bg);
+  padding: 8px 12px;
+  background: var(--mat-toolbar);
+  backdrop-filter: var(--vibrancy-toolbar);
+  -webkit-backdrop-filter: var(--vibrancy-toolbar);
+}
+.browser-toolbar {
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  min-height: 36px;
+}
+.url-row {
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 .repo-title {
   display: flex;
@@ -239,32 +250,39 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--fs-callout);
+  color: var(--fg-muted);
 }
-.url-row input {
+.url-row :deep(input) {
   flex: 1;
 }
 .crumbs {
   overflow-x: auto;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  padding-top: 6px;
+  padding-bottom: 6px;
+  gap: 2px;
 }
 .crumb {
   border: 0;
   background: transparent;
   color: var(--accent);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 3px 4px;
-  border-radius: 5px;
+  cursor: default;
+  font-size: var(--fs-callout);
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: background-color 120ms ease-out;
 }
 .crumb:hover {
   background: var(--accent-soft);
-  color: var(--accent-hover);
 }
-.crumb:not(:last-child)::after {
-  content: '/';
-  margin-left: 8px;
-  opacity: 0.45;
+.crumb-sep {
+  width: 11px;
+  height: 11px;
+  color: var(--fg-subtle);
+  flex: none;
 }
 .browser-body {
   display: grid;
@@ -286,24 +304,25 @@ watch(
   overflow: hidden;
 }
 .remote-list {
-  border-right: 1px solid var(--border);
-  background: var(--panel-bg-subtle);
+  background: var(--mat-content);
 }
-.browser-body:not(.preview-open) .remote-list {
-  border-right: 0;
+.browser-body.preview-open .remote-list {
+  border-right: var(--hairline) solid var(--stroke-soft);
 }
 .remote-table-head {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) 84px 72px 110px 170px;
   gap: 10px;
   align-items: center;
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 12px 0 42px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel-bg-muted);
-  color: var(--text-muted);
-  font-size: 12px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  background: var(--mat-toolbar);
+  color: var(--fg-muted);
+  font-size: var(--fs-caption);
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .remote-scroll {
   flex: 1 1 auto;
@@ -312,69 +331,54 @@ watch(
   overflow-x: auto;
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding: 4px 0;
 }
 .remote-row {
   display: grid;
-  grid-template-columns: 22px minmax(180px, 1fr) 84px 72px 110px 170px;
+  grid-template-columns: 16px minmax(180px, 1fr) 84px 72px 110px 170px;
   gap: 10px;
   align-items: center;
-  min-height: 32px;
-  padding: 3px 12px 3px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent);
-  cursor: pointer;
-  font-size: 12px;
-  background: var(--panel-bg);
+  min-height: 28px;
+  padding: 3px 12px;
+  margin: 1px 6px;
+  border-radius: var(--radius-row);
+  cursor: default;
+  font-size: var(--fs-callout);
+  transition: background-color 120ms ease-out;
 }
 .remote-row:hover {
-  background: var(--panel-bg-muted);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 .remote-row.active {
-  background: var(--accent-row);
+  background: var(--accent);
+}
+.remote-row.active .name,
+.remote-row.active .size,
+.remote-row.active .rev,
+.remote-row.active .author,
+.remote-row.active .date,
+.remote-row.active .entry-icon {
+  color: #fff;
 }
 .entry-icon {
-  position: relative;
-  display: inline-block;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   flex: none;
 }
-.dir-icon {
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--folder) 78%, white);
+.entry-icon.is-dir {
+  color: var(--accent);
 }
-.dir-icon::before {
-  content: '';
-  position: absolute;
-  left: 1px;
-  top: -3px;
-  width: 8px;
-  height: 5px;
-  border-radius: 3px 3px 0 0;
-  background: #ffe0a3;
-}
-.file-icon {
-  border: 1px solid color-mix(in srgb, var(--file) 46%, var(--border));
-  border-radius: 3px;
-  background: var(--file-soft);
-}
-.file-icon::after {
-  content: '';
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 5px;
-  height: 1px;
-  background: color-mix(in srgb, var(--file) 56%, var(--text-muted));
-  box-shadow: 0 4px 0 color-mix(in srgb, var(--file) 56%, var(--text-muted));
-  opacity: 0.55;
+.entry-icon.is-file {
+  color: var(--fg-muted);
 }
 .name {
-  color: var(--text-strong);
+  color: var(--fg-strong);
+  font-weight: 500;
 }
 .name,
 .author,
 .date,
-.preview-head span {
+.preview-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -383,35 +387,60 @@ watch(
 .rev,
 .author,
 .date {
-  opacity: 0.65;
-  color: var(--text-muted);
+  color: var(--fg-muted);
 }
 .preview-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel-bg-subtle);
+  padding: 0 8px 0 12px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  background: var(--mat-toolbar);
   min-height: 32px;
+  font-size: var(--fs-callout);
+}
+.preview-title {
+  color: var(--fg-strong);
+}
+.preview-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: default;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.preview-close:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+.icon-sm {
+  width: 13px;
+  height: 13px;
 }
 .file-content {
   flex: 1;
   min-height: 0;
   margin: 0;
-  padding: 10px;
+  padding: 12px 14px;
   overflow: auto;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--fs-mono);
+  line-height: 1.55;
   white-space: pre-wrap;
-  background: var(--panel-bg);
-  color: var(--text);
+  background: var(--mat-content);
+  color: var(--fg);
 }
 .empty-pane,
 .empty-preview {
   padding: 32px;
-  color: var(--text-muted);
+  color: var(--fg-muted);
   text-align: center;
+  font-size: var(--fs-callout);
 }
 </style>

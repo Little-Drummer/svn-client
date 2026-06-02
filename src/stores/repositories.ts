@@ -6,6 +6,7 @@ import type { RepositoryEntry } from '../types/svn'
 
 export const useRepositoriesStore = defineStore('repositories', () => {
   const items = ref<RepositoryEntry[]>([])
+  const selectedId = ref<string | null>(null)
   const loading = ref(false)
 
   async function reload() {
@@ -33,7 +34,12 @@ export const useRepositoriesStore = defineStore('repositories', () => {
   async function remove(id: string) {
     await api.removeRepository(id)
     items.value = items.value.filter((repo) => repo.id !== id)
+    if (selectedId.value === id) selectedId.value = null
   }
 
-  return { items, loading, reload, save, remove }
+  function select(id: string | null) {
+    selectedId.value = id
+  }
+
+  return { items, selectedId, loading, reload, save, remove, select }
 })

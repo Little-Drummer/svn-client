@@ -108,4 +108,10 @@ impl From<quick_xml::DeError> for AppError {
     }
 }
 
+impl From<quick_xml::Error> for AppError {
+    fn from(e: quick_xml::Error) -> Self {
+        AppError::XmlParse(e.to_string())
+    }
+}
+
 pub type AppResult<T> = Result<T, AppError>;

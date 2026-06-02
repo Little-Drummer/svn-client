@@ -91,6 +91,12 @@ export interface SvnLogEntry {
   paths: SvnLogPath[]
 }
 
+// 流式 status 事件，与后端 StatusStreamEvent 对应
+export type StatusStreamEvent =
+  | { kind: 'entries'; requestId: string; entries: SvnStatusEntry[] }
+  | { kind: 'finished'; requestId: string; count: number }
+  | { kind: 'failed'; requestId: string; message: string }
+
 // 长任务事件，与后端 TaskEvent 对应
 export type TaskEvent =
   | { kind: 'started'; taskId: string }

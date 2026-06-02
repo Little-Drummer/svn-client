@@ -47,6 +47,8 @@ export const api = {
   info: (path: string) => invoke<SvnInfo>('svn_get_info', { path }),
   status: (path: string, showUnversioned = true) =>
     invoke<SvnStatusEntry[]>('svn_get_status', { path, showUnversioned }),
+  statusStream: (path: string, showUnversioned = true) =>
+    invoke<string>('svn_get_status_stream', { path, showUnversioned }),
   log: (params: {
     path: string
     limit?: number
@@ -62,6 +64,7 @@ export const api = {
     invoke<string>('svn_get_diff_revision', { path, revision }),
   baseContent: (path: string) => invoke<string>('svn_get_base_content', { path }),
   readFileText: (path: string) => invoke<string>('read_file_text', { path }),
+  revealInFileManager: (path: string) => invoke<void>('reveal_in_file_manager', { path }),
   revert: (paths: string[]) => invoke<void>('svn_revert', { paths }),
   add: (paths: string[]) => invoke<void>('svn_add', { paths }),
   delete: (paths: string[]) => invoke<void>('svn_delete', { paths }),

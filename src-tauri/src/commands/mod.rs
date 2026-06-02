@@ -7,7 +7,7 @@ use crate::models::{
     RemoteListEntry, RepositoryEntry, SvnInfo, SvnLogEntry, SvnStatusEntry, WorkingCopyEntry,
     WorkingCopyFileEntry,
 };
-use crate::process::spawn_svn_task;
+use crate::process::{spawn_status_stream, spawn_svn_task};
 use crate::storage::ConfigState;
 use crate::svn::diff::{svn_cat_base, svn_diff_file, svn_diff_revision};
 use crate::svn::info::svn_info;
@@ -285,7 +285,14 @@ pub fn refresh_working_copy(state: State<ConfigState>, id: String) -> AppResult<
 }
 
 #[tauri::command]
-pub fn list_working_copy_files(root: String) -> AppResult<Vec<WorkingCopyFileEntry>> {
+pub async fn list_working_copy_files(root: String) -> AppResult<Vec<WorkingCopyFileEntry>> {
+    // 全量递归遍历目录树是阻塞 IO，必须移出主线程，否则切换工作副本时会冻结 UI
+    tauri::async_runtime::spawn_blocking(move || list_working_copy_files_blocking(root))
+        .await
+        .map_err(|e| AppError::Other(format!("文件树遍历任务失败: {e}")))?
+}
+
+fn list_working_copy_files_blocking(root: String) -> AppResult<Vec<WorkingCopyFileEntry>> {
     use std::path::{Path, PathBuf};
 
     fn build_entry(path: PathBuf, root: &Path) -> AppResult<Option<WorkingCopyFileEntry>> {
@@ -377,24 +384,46 @@ pub fn create_working_copy_folder(parent_path: String, name: String) -> AppResul
 // ---------- 只读查询 ----------
 
 #[tauri::command]
-pub fn svn_get_info(state: State<ConfigState>, path: String) -> AppResult<SvnInfo> {
+pub async fn svn_get_info(state: State<'_, ConfigState>, path: String) -> AppResult<SvnInfo> {
     let bin = state.svn_bin();
-    svn_info(&bin, &path)
+    tauri::async_runtime::spawn_blocking(move || svn_info(&bin, &path))
+        .await
+        .map_err(|e| AppError::Other(format!("svn info 任务失败: {e}")))?
 }
 
 #[tauri::command]
-pub fn svn_get_status(
-    state: State<ConfigState>,
+pub async fn svn_get_status(
+    state: State<'_, ConfigState>,
     path: String,
     show_unversioned: Option<bool>,
 ) -> AppResult<Vec<SvnStatusEntry>> {
     let bin = state.svn_bin();
-    svn_status(&bin, &path, show_unversioned.unwrap_or(true))
+    let show = show_unversioned.unwrap_or(true);
+    tauri::async_runtime::spawn_blocking(move || svn_status(&bin, &path, show))
+        .await
+        .map_err(|e| AppError::Other(format!("svn status 任务失败: {e}")))?
+}
+
+// 流式刷新状态，立即返回 request_id，结果通过 svn-status-stream 事件推送
+#[tauri::command]
+pub fn svn_get_status_stream(
+    app: AppHandle,
+    state: State<ConfigState>,
+    path: String,
+    show_unversioned: Option<bool>,
+) -> AppResult<String> {
+    let bin = state.svn_bin();
+    Ok(spawn_status_stream(
+        app,
+        bin,
+        path,
+        show_unversioned.unwrap_or(true),
+    ))
 }
 
 #[tauri::command]
-pub fn svn_get_log(
-    state: State<ConfigState>,
+pub async fn svn_get_log(
+    state: State<'_, ConfigState>,
     path: String,
     limit: Option<u32>,
     revision_range: Option<String>,
@@ -405,46 +434,96 @@ pub fn svn_get_log(
     with_paths: Option<bool>,
 ) -> AppResult<Vec<SvnLogEntry>> {
     let bin = state.svn_bin();
-    let opts = LogOptions {
-        target: &path,
-        limit: limit.unwrap_or(50).min(500),
-        revision_range: revision_range.as_deref(),
-        search: search.as_deref(),
-        author: author.as_deref(),
-        date_from: date_from.as_deref(),
-        date_to: date_to.as_deref(),
-        with_paths: with_paths.unwrap_or(true),
-    };
-    svn_log(&bin, &opts)
+    tauri::async_runtime::spawn_blocking(move || {
+        let opts = LogOptions {
+            target: &path,
+            limit: limit.unwrap_or(50).min(500),
+            revision_range: revision_range.as_deref(),
+            search: search.as_deref(),
+            author: author.as_deref(),
+            date_from: date_from.as_deref(),
+            date_to: date_to.as_deref(),
+            with_paths: with_paths.unwrap_or(true),
+        };
+        svn_log(&bin, &opts)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("svn log 任务失败: {e}")))?
 }
 
 #[tauri::command]
-pub fn svn_get_diff(state: State<ConfigState>, path: String) -> AppResult<String> {
+pub async fn svn_get_diff(state: State<'_, ConfigState>, path: String) -> AppResult<String> {
     let bin = state.svn_bin();
-    svn_diff_file(&bin, &path)
+    tauri::async_runtime::spawn_blocking(move || svn_diff_file(&bin, &path))
+        .await
+        .map_err(|e| AppError::Other(format!("svn diff 任务失败: {e}")))?
 }
 
 #[tauri::command]
-pub fn svn_get_diff_revision(
-    state: State<ConfigState>,
+pub async fn svn_get_diff_revision(
+    state: State<'_, ConfigState>,
     path: String,
     revision: u64,
 ) -> AppResult<String> {
     let bin = state.svn_bin();
-    svn_diff_revision(&bin, &path, revision)
+    tauri::async_runtime::spawn_blocking(move || svn_diff_revision(&bin, &path, revision))
+        .await
+        .map_err(|e| AppError::Other(format!("svn diff 任务失败: {e}")))?
 }
 
 #[tauri::command]
-pub fn svn_get_base_content(state: State<ConfigState>, path: String) -> AppResult<String> {
+pub async fn svn_get_base_content(state: State<'_, ConfigState>, path: String) -> AppResult<String> {
     let bin = state.svn_bin();
-    svn_cat_base(&bin, &path)
+    tauri::async_runtime::spawn_blocking(move || svn_cat_base(&bin, &path))
+        .await
+        .map_err(|e| AppError::Other(format!("svn cat 任务失败: {e}")))?
+}
+
+// 在系统文件管理器中定位文件（macOS Finder / Windows 资源管理器 / Linux 文件管理器）
+#[tauri::command]
+pub fn reveal_in_file_manager(path: String) -> AppResult<()> {
+    use std::process::Command;
+    let p = path.trim();
+    if p.is_empty() {
+        return Err(AppError::InvalidPath(path));
+    }
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("open");
+        c.args(["-R", p]);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = Command::new("explorer");
+        // explorer 的 /select 参数语法对斜杠敏感，交由系统按原样定位
+        c.arg(format!("/select,{}", p));
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        // Linux 没有统一的"定位并高亮"，退而打开所在目录
+        let parent = std::path::Path::new(p)
+            .parent()
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_else(|| p.to_string());
+        let mut c = Command::new("xdg-open");
+        c.arg(parent);
+        c
+    };
+    cmd.spawn().map_err(AppError::Io)?;
+    Ok(())
 }
 
 // 读取磁盘文件文本，用于 diff 视图的 split 模式（避免引入完整 fs plugin）
 #[tauri::command]
-pub fn read_file_text(path: String) -> AppResult<String> {
-    let bytes = std::fs::read(&path).map_err(AppError::Io)?;
-    Ok(crate::svn::runner::decode_output(&bytes))
+pub async fn read_file_text(path: String) -> AppResult<String> {
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<String> {
+        let bytes = std::fs::read(&path).map_err(AppError::Io)?;
+        Ok(crate::svn::runner::decode_output(&bytes))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("读取文件任务失败: {e}")))?
 }
 
 // 简单的 revert（用于撤销本地改动），调用方负责前端二次确认
@@ -562,7 +641,7 @@ pub fn svn_start_commit(
     for p in paths {
         args.push(p);
     }
-    spawn_svn_task(app, bin, args)
+    spawn_svn_task(app, bin, args, "提交".into())
 }
 
 #[tauri::command]
@@ -581,7 +660,7 @@ pub fn svn_start_update(
         }
     }
     args.push(path);
-    spawn_svn_task(app, bin, args)
+    spawn_svn_task(app, bin, args, "更新".into())
 }
 
 #[tauri::command]
@@ -619,5 +698,5 @@ pub fn svn_start_checkout(
     }
     args.push(url);
     args.push(target_path);
-    spawn_svn_task(app, bin, args)
+    spawn_svn_task(app, bin, args, "检出".into())
 }

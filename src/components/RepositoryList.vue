@@ -129,7 +129,7 @@ async function remove(id: string) {
       <div
         v-for="repo in store.items"
         :key="repo.id"
-        class="repo-item"
+        :class="['repo-item', { active: repo.id === store.selectedId }]"
         @click="emit('browse', repo)"
       >
         <Cloud class="repo-icon" />
@@ -320,6 +320,28 @@ async function remove(id: string) {
 }
 .repo-item:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.repo-item.active {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+}
+.repo-item.active .repo-name {
+  color: #fff;
+  font-weight: 600;
+}
+.repo-item.active .repo-url,
+.repo-item.active .meta-time {
+  color: rgba(255, 255, 255, 0.75);
+}
+.repo-item.active .repo-actions {
+  opacity: 1;
+}
+.repo-item.active .row-icon-btn {
+  color: rgba(255, 255, 255, 0.78);
+}
+.repo-item.active .row-icon-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
 }
 .repo-icon {
   width: 14px;
