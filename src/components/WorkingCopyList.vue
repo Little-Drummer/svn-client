@@ -136,16 +136,18 @@ function toggleRoot(key: string) {
   collapsedRoots.value = next
 }
 
-async function editDisplayName(wc: WorkingCopyEntry) {
+function editDisplayName(wc: WorkingCopyEntry) {
   const current = wc.displayName || getSmartLabel(wc)
-  const input = prompt('设置此工作副本的显示名称（留空则恢复自动推断）：', current || '')
-  if (input === null) return // 用户取消
-  const newName = input.trim() ? input.trim() : null
-  try {
-    await store.setDisplayName(wc.id, newName)
-  } catch (e) {
-    toast(e, '保存显示名称失败')
-  }
+  // 延迟打开 prompt，让当前点击事件（包括 reka tooltip、row select、pointer-events）完全 settle，
+  // 避免在复杂 hover + 动作按钮场景下点击无反应或 prompt 被吞。
+  setTimeout(() => {
+    const input = prompt('设置此工作副本的显示名称（留空则恢复自动推断）：', current || '')
+    if (input === null) return // 用户取消
+    const newName = input.trim() ? input.trim() : null
+    store.setDisplayName(wc.id, newName).catch((e) => {
+      toast(e, '保存显示名称失败')
+    })
+  }, 10)
 }
 </script>
 
@@ -199,7 +201,7 @@ async function editDisplayName(wc: WorkingCopyEntry) {
                         size="icon-sm"
                         variant="ghost"
                         class="row-icon-btn"
-                        @click="refresh(wc.id)"
+                        @click.stop="refresh(wc.id)"
                       >
                         <RefreshCw class="icon-xs" />
                       </Button>
@@ -214,7 +216,7 @@ async function editDisplayName(wc: WorkingCopyEntry) {
                         size="icon-sm"
                         variant="ghost"
                         class="row-icon-btn"
-                        @click="editDisplayName(wc)"
+                        @click.stop="editDisplayName(wc)"
                       >
                         <Pencil class="icon-xs" />
                       </Button>
@@ -229,7 +231,7 @@ async function editDisplayName(wc: WorkingCopyEntry) {
                         size="icon-sm"
                         variant="ghost"
                         class="row-icon-btn danger-action"
-                        @click="remove(wc.id)"
+                        @click.stop="remove(wc.id)"
                       >
                         <Trash2 class="icon-xs" />
                       </Button>
@@ -369,8 +371,9 @@ async function editDisplayName(wc: WorkingCopyEntry) {
   color: var(--fg-on-accent);
 }
 .wc-row-main {
+  position: relative;
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
@@ -426,14 +429,25 @@ async function editDisplayName(wc: WorkingCopyEntry) {
   white-space: nowrap;
 }
 .wc-actions {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
   display: flex;
   gap: 2px;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 140ms ease-out;
 }
 .wc-item:hover .wc-actions,
 .wc-item.active .wc-actions {
   opacity: 1;
+  pointer-events: auto;
+}
+.wc-item:hover .wc-actions {
+  /* subtle mask so long name text doesn't bleed through gaps between action buttons */
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
 }
 .row-icon-btn {
   width: 22px;

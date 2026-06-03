@@ -93,5 +93,5 @@ export function getGroupKey(wc: WorkingCopyEntry): string {
 export function getFullTitle(wc: WorkingCopyEntry): string {
   const loc = wc.path
   const branchInfo = wc.relativeUrl || wc.url || ''
-  return [loc, branchInfo].filter(Boolean).join('\n')
+  return branchInfo ? `${loc}\n${branchInfo}` : loc
 }
