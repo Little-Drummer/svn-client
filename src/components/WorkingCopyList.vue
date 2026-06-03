@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import {
   ChevronDown,
+  Folder,
   FolderGit2,
   HardDrive,
   Pencil,
@@ -21,12 +22,13 @@ import { useRepositoriesStore } from '../stores/repositories'
 import { useErrorToast } from '../composables/use-error-toast'
 import type { WorkingCopyEntry } from '../types/svn'
 import {
-  getSmartLabel,
+  getWorkingCopyLeafLabel,
+  getWorkingCopyTreePath,
   getSmartSubtitle,
-  getGroupKey,
   getFullTitle as fullTitle,
   getDecodedBranchInfo,
   getDecodedUrl,
+  type WorkingCopyTreeSegment,
 } from '../lib/utils'
 
 const props = withDefaults(defineProps<{ showActive?: boolean }>(), { showActive: true })
@@ -40,7 +42,22 @@ const repoStore = useRepositoriesStore()
 const toast = useErrorToast()
 
 const items = computed(() => store.items)
-const collapsedRoots = ref<Set<string>>(new Set())
+const collapsedNodes = ref<Set<string>>(new Set())
+
+interface WorkingCopyTreeNode {
+  key: string
+  label: string
+  value: string
+  kind: WorkingCopyTreeSegment['kind']
+  title?: string
+  count: number
+  children: WorkingCopyTreeNode[]
+  copies: WorkingCopyEntry[]
+}
+
+type WorkingCopyTreeRow =
+  | { kind: 'node'; key: string; node: WorkingCopyTreeNode; depth: number }
+  | { kind: 'copy'; key: string; wc: WorkingCopyEntry; depth: number; fallbackLabel?: string }
 
 function normalizeUrl(u: string) {
   return u.replace(/\/+$/, '')
@@ -58,27 +75,124 @@ function repoNameForRoot(root: string): string | null {
   return null
 }
 
-const groups = computed(() => {
-  const map = new Map<string, { key: string; copies: typeof store.items }>()
+const tree = computed(() => {
+  const roots: WorkingCopyTreeNode[] = []
   for (const wc of store.items) {
-    const key = getGroupKey(wc)
-    if (!map.has(key)) map.set(key, { key, copies: [] })
-    map.get(key)!.copies.push(wc)
-  }
-  return [...map.values()]
-    .map((g) => {
-      // 为本地项目组生成友好标题；仓库组回退旧逻辑
-      let label = g.key
-      if (g.key.startsWith('local:')) {
-        label = g.key.slice(6)
-      } else if (g.key.startsWith('repo:')) {
-        const root = g.key.slice(5)
-        label = repoNameForRoot(root) ?? rootLabel(root)
+    const segments = getWorkingCopyTreePath(wc).map(resolveTreeSegment)
+    let level = roots
+    let node: WorkingCopyTreeNode | null = null
+
+    for (const segment of segments) {
+      node = level.find((item) => item.key === segment.key) ?? null
+      if (!node) {
+        node = {
+          key: segment.key,
+          label: segment.label,
+          value: segment.value,
+          kind: segment.kind,
+          title: segment.title,
+          count: 0,
+          children: [],
+          copies: [],
+        }
+        level.push(node)
       }
-      return { key: g.key, copies: g.copies, label }
-    })
-    .sort((a, b) => a.label.localeCompare(b.label))
+      node.count += 1
+      level = node.children
+    }
+
+    if (node) node.copies.push(wc)
+  }
+
+  sortTree(roots)
+  return roots
 })
+
+const treeRows = computed(() => {
+  const rows: WorkingCopyTreeRow[] = []
+
+  function walk(node: WorkingCopyTreeNode, depth: number) {
+    // 模块目录只有一个工作副本时，直接把模块行渲染为可操作叶子，避免 rest/rest 重复。
+    if (node.kind === 'module' && node.children.length === 0 && node.copies.length === 1) {
+      rows.push({
+        kind: 'copy',
+        key: `copy:${node.copies[0].id}`,
+        wc: node.copies[0],
+        depth,
+        fallbackLabel: node.label,
+      })
+      return
+    }
+
+    rows.push({ kind: 'node', key: `node:${node.key}`, node, depth })
+    if (collapsedNodes.value.has(node.key)) return
+
+    for (const child of node.children) walk(child, depth + 1)
+    for (const wc of node.copies) {
+      rows.push({ kind: 'copy', key: `copy:${wc.id}`, wc, depth: depth + 1 })
+    }
+  }
+
+  for (const root of tree.value) walk(root, 0)
+  return rows
+})
+
+function resolveTreeSegment(segment: WorkingCopyTreeSegment): WorkingCopyTreeSegment {
+  if (!segment.key.startsWith('repo:')) return segment
+  const root = segment.key.slice(5)
+  return {
+    ...segment,
+    label: repoNameForRoot(root) ?? rootLabel(root),
+    title: getDecodedUrl(root),
+  }
+}
+
+const ENV_ORDER = new Map([
+  ['develop', 0],
+  ['test', 1],
+  ['produce', 2],
+  ['默认', 3],
+])
+const MODULE_ORDER = new Map([
+  ['front', 0],
+  ['rest', 1],
+  ['database', 2],
+  ['updatesql', 3],
+])
+
+function sortTree(nodes: WorkingCopyTreeNode[]) {
+  nodes.sort(compareTreeNode)
+  for (const node of nodes) {
+    sortTree(node.children)
+    node.copies.sort((a, b) => copyLabel({ wc: a }).localeCompare(copyLabel({ wc: b }), 'zh-CN'))
+  }
+}
+
+function compareTreeNode(a: WorkingCopyTreeNode, b: WorkingCopyTreeNode) {
+  const rankA = treeNodeRank(a)
+  const rankB = treeNodeRank(b)
+  if (rankA !== rankB) return rankA - rankB
+  return a.label.localeCompare(b.label, 'zh-CN')
+}
+
+function treeNodeRank(node: WorkingCopyTreeNode) {
+  const lower = node.value.toLowerCase()
+  if (node.kind === 'environment') return ENV_ORDER.get(lower) ?? 50
+  if (node.kind === 'module') return MODULE_ORDER.get(lower) ?? 50
+  return 0
+}
+
+function rowIndent(depth: number) {
+  return `${8 + depth * 14}px`
+}
+
+function copyIndent(depth: number) {
+  return `${6 + depth * 14}px`
+}
+
+function copyLabel(row: { wc: WorkingCopyEntry; fallbackLabel?: string }) {
+  return row.wc.displayName || row.fallbackLabel || getWorkingCopyLeafLabel(row.wc)
+}
 
 onMounted(() => {
   store.reload().catch(toast)
@@ -132,11 +246,11 @@ function selectWc(id: string) {
   emit('select', id)
 }
 
-function toggleRoot(key: string) {
-  const next = new Set(collapsedRoots.value)
+function toggleNode(key: string) {
+  const next = new Set(collapsedNodes.value)
   if (next.has(key)) next.delete(key)
   else next.add(key)
-  collapsedRoots.value = next
+  collapsedNodes.value = next
 }
 
 // 内联编辑状态：彻底避开 prompt + tooltip + hover 的事件竞争问题
@@ -144,9 +258,9 @@ const editingId = ref<string | null>(null)
 const editingValue = ref('')
 const editingInputRef = ref<any>(null)
 
-async function startEdit(wc: WorkingCopyEntry) {
+async function startEdit(wc: WorkingCopyEntry, fallbackLabel?: string) {
   editingId.value = wc.id
-  editingValue.value = wc.displayName || getSmartLabel(wc)
+  editingValue.value = wc.displayName || fallbackLabel || getWorkingCopyLeafLabel(wc)
   await nextTick()
   // 聚焦原生 input（Input 组件根元素即 input）
   try {
@@ -192,108 +306,115 @@ function cancelEdit() {
       <div v-if="items.length === 0" class="wc-empty">
         <EmptyState description="还没有工作副本，点上面按钮选一个本地目录" />
       </div>
-      <div v-for="group in groups" :key="group.key" class="wc-group">
-        <button class="root-row" type="button" @click="toggleRoot(group.key)">
+      <template v-for="row in treeRows" :key="row.key">
+        <button
+          v-if="row.kind === 'node'"
+          :class="['root-row', 'tree-row', { 'child-row': row.depth > 0 }]"
+          :style="{ paddingLeft: rowIndent(row.depth) }"
+          type="button"
+          @click="toggleNode(row.node.key)"
+        >
           <ChevronDown
-            :class="['root-chevron', { collapsed: collapsedRoots.has(group.key) }]"
+            :class="['root-chevron', { collapsed: collapsedNodes.has(row.node.key) }]"
           />
-          <FolderGit2 class="root-icon" />
+          <component
+            :is="row.depth === 0 ? FolderGit2 : Folder"
+            :class="['root-icon', { 'child-icon': row.depth > 0 }]"
+          />
           <span
             class="root-name"
-            :title="group.key.startsWith('local:') ? '本地项目分组：' + group.label : getDecodedUrl(group.key.replace(/^repo:/, ''))"
-          >{{ group.label }}</span>
-          <span class="root-count mono">{{ group.copies.length }}</span>
+            :title="row.node.title || row.node.label"
+          >{{ row.node.label }}</span>
+          <span class="root-count mono">{{ row.node.count }}</span>
         </button>
-        <div v-if="!collapsedRoots.has(group.key)" class="copy-list">
-          <div
-            v-for="wc in group.copies"
-            :key="wc.id"
-            :class="['wc-item', { active: props.showActive && wc.id === store.selectedId }]"
-            @click="selectWc(wc.id)"
-          >
-            <div class="wc-row-main">
-              <HardDrive class="wc-icon" />
-              <div class="wc-text">
-                <div class="wc-name-wrap" @click.stop>
-                  <template v-if="editingId === wc.id">
-                    <Input
-                      ref="editingInputRef"
-                      v-model="editingValue"
-                      class="edit-name-input"
-                      @keydown.enter="commitEdit"
-                      @keydown.esc="cancelEdit"
-                      @blur="commitEdit"
-                    />
-                  </template>
-                  <div
-                    v-else
-                    class="wc-name"
-                    :title="fullTitle(wc)"
-                    @dblclick="startEdit(wc)"
-                  >
-                    {{ getSmartLabel(wc) }}
-                  </div>
-                </div>
-                <div v-if="editingId !== wc.id" class="wc-meta">
-                  <span v-if="wc.revision" class="meta-rev mono">r{{ wc.revision }}</span>
-                  <span
-                    v-if="getSmartSubtitle(wc)"
-                    class="wc-url mono"
-                    :title="getDecodedBranchInfo(wc) || ''"
-                  >{{ getSmartSubtitle(wc) }}</span>
+        <div
+          v-else
+          :class="['wc-item', { active: props.showActive && row.wc.id === store.selectedId }]"
+          :style="{ marginLeft: copyIndent(row.depth) }"
+          @click="selectWc(row.wc.id)"
+        >
+          <div class="wc-row-main">
+            <HardDrive class="wc-icon" />
+            <div class="wc-text">
+              <div class="wc-name-wrap" @click.stop>
+                <template v-if="editingId === row.wc.id">
+                  <Input
+                    ref="editingInputRef"
+                    v-model="editingValue"
+                    class="edit-name-input"
+                    @keydown.enter="commitEdit"
+                    @keydown.esc="cancelEdit"
+                    @blur="commitEdit"
+                  />
+                </template>
+                <div
+                  v-else
+                  class="wc-name"
+                  :title="fullTitle(row.wc)"
+                  @dblclick="startEdit(row.wc, copyLabel(row))"
+                >
+                  {{ copyLabel(row) }}
                 </div>
               </div>
-              <div v-if="editingId !== wc.id" class="wc-actions" @click.stop>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger as-child>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        class="row-icon-btn"
-                        @click.stop="refresh(wc.id)"
-                      >
-                        <RefreshCw class="icon-xs" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>重新读取 svn info</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger as-child>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        class="row-icon-btn"
-                        @click.stop="startEdit(wc)"
-                      >
-                        <Pencil class="icon-xs" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>编辑显示名称（自动推断或自定义）</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger as-child>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        class="row-icon-btn danger-action"
-                        @click.stop="remove(wc.id)"
-                      >
-                        <Trash2 class="icon-xs" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>从列表移除</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+              <div v-if="editingId !== row.wc.id" class="wc-meta">
+                <span v-if="row.wc.revision" class="meta-rev mono">r{{ row.wc.revision }}</span>
+                <span
+                  v-if="getSmartSubtitle(row.wc)"
+                  class="wc-url mono"
+                  :title="getDecodedBranchInfo(row.wc) || ''"
+                >{{ getSmartSubtitle(row.wc) }}</span>
               </div>
+            </div>
+            <div v-if="editingId !== row.wc.id" class="wc-actions" @click.stop>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      class="row-icon-btn"
+                      @click.stop="refresh(row.wc.id)"
+                    >
+                      <RefreshCw class="icon-xs" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>重新读取 svn info</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      class="row-icon-btn"
+                      @click.stop="startEdit(row.wc, copyLabel(row))"
+                    >
+                      <Pencil class="icon-xs" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>编辑显示名称（自动推断或自定义）</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      class="row-icon-btn danger-action"
+                      @click.stop="remove(row.wc.id)"
+                    >
+                      <Trash2 class="icon-xs" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>从列表移除</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </div>
         </div>
-      </div>
+      </template>
     </div>
   </div>
 </template>
@@ -345,10 +466,7 @@ function cancelEdit() {
   text-align: center;
 }
 
-/* ===== 仓库分组 ===== */
-.wc-group {
-  margin-bottom: 4px;
-}
+/* ===== 工作副本树 ===== */
 .root-row {
   width: calc(100% - 12px);
   margin: 0 6px 1px;
@@ -370,6 +488,13 @@ function cancelEdit() {
 .root-row:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
+.tree-row.child-row {
+  min-height: 24px;
+}
+.tree-row.child-row .root-name {
+  font-weight: 500;
+  color: var(--fg);
+}
 .root-chevron {
   width: 12px;
   height: 12px;
@@ -384,6 +509,10 @@ function cancelEdit() {
   height: 14px;
   color: var(--accent);
   flex: none;
+}
+.root-icon.child-icon {
+  color: var(--folder);
+  opacity: 0.88;
 }
 .root-name {
   min-width: 0;
@@ -401,9 +530,6 @@ function cancelEdit() {
 }
 
 /* ===== 工作副本行（NSSourceList capsule selection）===== */
-.copy-list {
-  padding-left: 18px;
-}
 .wc-item {
   margin: 1px 6px;
   padding: 0;
