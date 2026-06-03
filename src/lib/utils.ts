@@ -19,6 +19,29 @@ function safeDecode(segment: string): string {
   }
 }
 
+// 解码 SVN 返回的 URL / relativeUrl（XML 中非 ASCII 路径会被 percent-encode），用于 hover title 等人类可读展示
+export function getDecodedUrl(u?: string | null): string {
+  if (!u) return ''
+  try {
+    const url = new URL(u)
+    const decodedPath = url.pathname.split('/').map(safeDecode).join('/')
+    return `${url.origin}${decodedPath}${url.search}${url.hash}`
+  } catch {
+    // 非标准 URL 时按路径段解码（兼容 ^/branches/xxx 形式）
+    return u.split('/').map(safeDecode).join('/')
+  }
+}
+
+export function getDecodedBranchInfo(wc: WorkingCopyEntry): string {
+  if (wc.relativeUrl) {
+    return wc.relativeUrl.split('/').map(safeDecode).join('/')
+  }
+  if (wc.url) {
+    return getDecodedUrl(wc.url)
+  }
+  return ''
+}
+
 export function getLocalProject(path: string): string | null {
   const parts = path.split(/[\\/]/).filter(Boolean)
   const workIdx = parts.findIndex((p) => p.toLowerCase() === 'work')
@@ -92,6 +115,6 @@ export function getGroupKey(wc: WorkingCopyEntry): string {
 
 export function getFullTitle(wc: WorkingCopyEntry): string {
   const loc = wc.path
-  const branchInfo = wc.relativeUrl || wc.url || ''
+  const branchInfo = getDecodedBranchInfo(wc)
   return branchInfo ? `${loc}\n${branchInfo}` : loc
 }

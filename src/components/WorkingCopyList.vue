@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { open } from '@tauri-apps/plugin-dialog'
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import {
   ChevronDown,
   FolderGit2,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import { confirm } from '@/composables/use-confirm-dialog'
@@ -24,6 +25,8 @@ import {
   getSmartSubtitle,
   getGroupKey,
   getFullTitle as fullTitle,
+  getDecodedBranchInfo,
+  getDecodedUrl,
 } from '../lib/utils'
 
 const props = withDefaults(defineProps<{ showActive?: boolean }>(), { showActive: true })
@@ -136,18 +139,43 @@ function toggleRoot(key: string) {
   collapsedRoots.value = next
 }
 
-function editDisplayName(wc: WorkingCopyEntry) {
-  const current = wc.displayName || getSmartLabel(wc)
-  // 延迟打开 prompt，让当前点击事件（包括 reka tooltip、row select、pointer-events）完全 settle，
-  // 避免在复杂 hover + 动作按钮场景下点击无反应或 prompt 被吞。
-  setTimeout(() => {
-    const input = prompt('设置此工作副本的显示名称（留空则恢复自动推断）：', current || '')
-    if (input === null) return // 用户取消
-    const newName = input.trim() ? input.trim() : null
-    store.setDisplayName(wc.id, newName).catch((e) => {
-      toast(e, '保存显示名称失败')
-    })
-  }, 10)
+// 内联编辑状态：彻底避开 prompt + tooltip + hover 的事件竞争问题
+const editingId = ref<string | null>(null)
+const editingValue = ref('')
+const editingInputRef = ref<any>(null)
+
+async function startEdit(wc: WorkingCopyEntry) {
+  editingId.value = wc.id
+  editingValue.value = wc.displayName || getSmartLabel(wc)
+  await nextTick()
+  // 聚焦原生 input（Input 组件根元素即 input）
+  try {
+    const el = editingInputRef.value?.$el || editingInputRef.value
+    const input = el?.focus ? el : el?.querySelector?.('input')
+    if (input) {
+      input.focus()
+      if (input.select) input.select()
+    }
+  } catch {}
+}
+
+async function commitEdit() {
+  const id = editingId.value
+  if (!id) return
+  const val = editingValue.value.trim()
+  const newName = val ? val : null
+  try {
+    await store.setDisplayName(id, newName)
+  } catch (e) {
+    toast(e, '保存显示名称失败')
+  }
+  editingId.value = null
+  editingValue.value = ''
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editingValue.value = ''
 }
 </script>
 
@@ -170,7 +198,10 @@ function editDisplayName(wc: WorkingCopyEntry) {
             :class="['root-chevron', { collapsed: collapsedRoots.has(group.key) }]"
           />
           <FolderGit2 class="root-icon" />
-          <span class="root-name" :title="group.key.startsWith('local:') ? '本地项目分组：' + group.label : group.key">{{ group.label }}</span>
+          <span
+            class="root-name"
+            :title="group.key.startsWith('local:') ? '本地项目分组：' + group.label : getDecodedUrl(group.key.replace(/^repo:/, ''))"
+          >{{ group.label }}</span>
           <span class="root-count mono">{{ group.copies.length }}</span>
         </button>
         <div v-if="!collapsedRoots.has(group.key)" class="copy-list">
@@ -183,17 +214,36 @@ function editDisplayName(wc: WorkingCopyEntry) {
             <div class="wc-row-main">
               <HardDrive class="wc-icon" />
               <div class="wc-text">
-                <div class="wc-name" :title="fullTitle(wc)">{{ getSmartLabel(wc) }}</div>
-                <div class="wc-meta">
+                <div class="wc-name-wrap" @click.stop>
+                  <template v-if="editingId === wc.id">
+                    <Input
+                      ref="editingInputRef"
+                      v-model="editingValue"
+                      class="edit-name-input"
+                      @keydown.enter="commitEdit"
+                      @keydown.esc="cancelEdit"
+                      @blur="commitEdit"
+                    />
+                  </template>
+                  <div
+                    v-else
+                    class="wc-name"
+                    :title="fullTitle(wc)"
+                    @dblclick="startEdit(wc)"
+                  >
+                    {{ getSmartLabel(wc) }}
+                  </div>
+                </div>
+                <div v-if="editingId !== wc.id" class="wc-meta">
                   <span v-if="wc.revision" class="meta-rev mono">r{{ wc.revision }}</span>
                   <span
                     v-if="getSmartSubtitle(wc)"
                     class="wc-url mono"
-                    :title="wc.relativeUrl || wc.url || ''"
+                    :title="getDecodedBranchInfo(wc) || ''"
                   >{{ getSmartSubtitle(wc) }}</span>
                 </div>
               </div>
-              <div class="wc-actions" @click.stop>
+              <div v-if="editingId !== wc.id" class="wc-actions" @click.stop>
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger as-child>
@@ -216,7 +266,7 @@ function editDisplayName(wc: WorkingCopyEntry) {
                         size="icon-sm"
                         variant="ghost"
                         class="row-icon-btn"
-                        @click.stop="editDisplayName(wc)"
+                        @click.stop="startEdit(wc)"
                       >
                         <Pencil class="icon-xs" />
                       </Button>
@@ -476,5 +526,22 @@ function editDisplayName(wc: WorkingCopyEntry) {
 .icon-xs {
   width: 12px;
   height: 12px;
+}
+
+/* ===== 内联编辑输入（替换名称行，适配列表密度）===== */
+.wc-name-wrap {
+  min-width: 0;
+}
+.edit-name-input {
+  height: 24px;
+  font-size: var(--fs-callout);
+  font-weight: 500;
+  /* 让输入框在行内不被绝对定位的 actions 遮挡，actions 编辑时已隐藏 */
+  padding-right: 4px;
+}
+.wc-item.active .edit-name-input {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 </style>
