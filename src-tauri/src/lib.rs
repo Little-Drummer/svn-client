@@ -94,6 +94,7 @@ pub fn run() {
             commands::add_working_copy,
             commands::remove_working_copy,
             commands::refresh_working_copy,
+            commands::set_working_copy_display_name,
             commands::list_working_copy_files,
             commands::create_working_copy_folder,
             commands::svn_get_info,

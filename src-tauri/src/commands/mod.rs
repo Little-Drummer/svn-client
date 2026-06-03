@@ -207,6 +207,8 @@ pub fn add_working_copy(state: State<ConfigState>, path: String) -> AppResult<Wo
         repository_root: Some(info.repository_root),
         revision: Some(info.revision),
         last_seen_at: Some(Utc::now().to_rfc3339()),
+        relative_url: info.relative_url.clone(),
+        display_name: None,
     };
 
     {
@@ -224,6 +226,8 @@ pub fn add_working_copy(state: State<ConfigState>, path: String) -> AppResult<Wo
             existing.repository_root = entry.repository_root.clone();
             existing.revision = entry.revision;
             existing.last_seen_at = entry.last_seen_at.clone();
+            existing.relative_url = entry.relative_url.clone();
+            // 保留用户之前设置的 display_name，不要覆盖
             let result = existing.clone();
             drop(cfg);
             state.save()?;
@@ -278,6 +282,38 @@ pub fn refresh_working_copy(state: State<ConfigState>, id: String) -> AppResult<
     entry.repository_root = Some(info.repository_root);
     entry.revision = Some(info.revision);
     entry.last_seen_at = Some(Utc::now().to_rfc3339());
+    entry.relative_url = info.relative_url.clone();
+    // display_name 由用户手动维护，刷新时不覆盖
+    let result = entry.clone();
+    drop(cfg);
+    state.save()?;
+    Ok(result)
+}
+
+/// 仅更新工作副本的显示名称（用户自定义别名），不重新执行 svn info
+#[tauri::command]
+pub fn set_working_copy_display_name(
+    state: State<ConfigState>,
+    id: String,
+    display_name: Option<String>,
+) -> AppResult<WorkingCopyEntry> {
+    let mut cfg = state
+        .config
+        .lock()
+        .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+
+    let entry = cfg
+        .working_copies
+        .iter_mut()
+        .find(|wc| wc.id == id)
+        .ok_or_else(|| AppError::Other(format!("找不到工作副本 {}", id)))?;
+
+    entry.display_name = if display_name.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+        None
+    } else {
+        display_name
+    };
+
     let result = entry.clone();
     drop(cfg);
     state.save()?;

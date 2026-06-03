@@ -53,9 +53,16 @@ export const useWorkingCopiesStore = defineStore('workingCopies', () => {
     return entry
   }
 
+  async function setDisplayName(id: string, displayName: string | null) {
+    const entry = await api.setWorkingCopyDisplayName(id, displayName)
+    const idx = items.value.findIndex((wc) => wc.id === id)
+    if (idx >= 0) items.value[idx] = entry
+    return entry
+  }
+
   function select(id: string | null) {
     selectedId.value = id
   }
 
-  return { items, selectedId, selected, loading, reload, add, remove, refresh, select }
+  return { items, selectedId, selected, loading, reload, add, remove, refresh, setDisplayName, select }
 })

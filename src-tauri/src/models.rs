@@ -10,6 +10,10 @@ pub struct WorkingCopyEntry {
     pub repository_root: Option<String>,
     pub revision: Option<u64>,
     pub last_seen_at: Option<String>,
+    #[serde(default)]
+    pub relative_url: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 // 保存的远端仓库配置

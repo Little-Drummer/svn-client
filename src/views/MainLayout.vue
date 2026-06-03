@@ -22,6 +22,7 @@ import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useTasksStore } from '../stores/tasks'
 import { api, describeError } from '../api/svn'
 import type { RepositoryEntry } from '../types/svn'
+import { getSmartLabel } from '../lib/utils'
 
 const repoStore = useRepositoriesStore()
 const wcStore = useWorkingCopiesStore()
@@ -145,7 +146,8 @@ const breadcrumb = computed(() => {
   } catch {
     repoName = root.split(/[\\/]/).filter(Boolean).pop() || root
   }
-  const wcName = wc.path.split(/[\\/]/).filter(Boolean).pop() || wc.path
+  // 使用智能标签（displayName 或本地+分支自动推断），而不是只显示最后一段文件夹
+  const wcName = getSmartLabel(wc)
   return { repoName, wcName, fullPath: wc.path, revision: wc.revision }
 })
 

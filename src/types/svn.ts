@@ -7,6 +7,8 @@ export interface WorkingCopyEntry {
   repositoryRoot?: string | null
   revision?: number | null
   lastSeenAt?: string | null
+  relativeUrl?: string | null
+  displayName?: string | null
 }
 
 export interface RepositoryEntry {

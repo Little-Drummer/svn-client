@@ -38,6 +38,8 @@ export const api = {
   removeWorkingCopy: (id: string) => invoke<void>('remove_working_copy', { id }),
   refreshWorkingCopy: (id: string) =>
     invoke<WorkingCopyEntry>('refresh_working_copy', { id }),
+  setWorkingCopyDisplayName: (id: string, displayName: string | null) =>
+    invoke<WorkingCopyEntry>('set_working_copy_display_name', { id, displayName }),
   listWorkingCopyFiles: (root: string) =>
     invoke<WorkingCopyFileEntry[]>('list_working_copy_files', { root }),
   createWorkingCopyFolder: (parentPath: string, name: string) =>

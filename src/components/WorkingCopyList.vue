@@ -5,6 +5,7 @@ import {
   ChevronDown,
   FolderGit2,
   HardDrive,
+  Pencil,
   Plus,
   RefreshCw,
   Trash2,
@@ -17,6 +18,13 @@ import { confirm } from '@/composables/use-confirm-dialog'
 import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useRepositoriesStore } from '../stores/repositories'
 import { useErrorToast } from '../composables/use-error-toast'
+import type { WorkingCopyEntry } from '../types/svn'
+import {
+  getSmartLabel,
+  getSmartSubtitle,
+  getGroupKey,
+  getFullTitle as fullTitle,
+} from '../lib/utils'
 
 const props = withDefaults(defineProps<{ showActive?: boolean }>(), { showActive: true })
 
@@ -48,14 +56,24 @@ function repoNameForRoot(root: string): string | null {
 }
 
 const groups = computed(() => {
-  const map = new Map<string, { root: string; copies: typeof store.items }>()
+  const map = new Map<string, { key: string; copies: typeof store.items }>()
   for (const wc of store.items) {
-    const root = wc.repositoryRoot ?? wc.url ?? '未知远端'
-    if (!map.has(root)) map.set(root, { root, copies: [] })
-    map.get(root)!.copies.push(wc)
+    const key = getGroupKey(wc)
+    if (!map.has(key)) map.set(key, { key, copies: [] })
+    map.get(key)!.copies.push(wc)
   }
   return [...map.values()]
-    .map((g) => ({ ...g, label: repoNameForRoot(g.root) ?? rootLabel(g.root) }))
+    .map((g) => {
+      // 为本地项目组生成友好标题；仓库组回退旧逻辑
+      let label = g.key
+      if (g.key.startsWith('local:')) {
+        label = g.key.slice(6)
+      } else if (g.key.startsWith('repo:')) {
+        const root = g.key.slice(5)
+        label = repoNameForRoot(root) ?? rootLabel(root)
+      }
+      return { key: g.key, copies: g.copies, label }
+    })
     .sort((a, b) => a.label.localeCompare(b.label))
 })
 
@@ -96,11 +114,6 @@ async function remove(id: string) {
   }
 }
 
-function shortPath(p: string) {
-  const parts = p.split(/[\\/]/).filter(Boolean)
-  return parts[parts.length - 1] || p
-}
-
 function rootLabel(root: string) {
   try {
     const u = new URL(root)
@@ -116,11 +129,23 @@ function selectWc(id: string) {
   emit('select', id)
 }
 
-function toggleRoot(root: string) {
+function toggleRoot(key: string) {
   const next = new Set(collapsedRoots.value)
-  if (next.has(root)) next.delete(root)
-  else next.add(root)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
   collapsedRoots.value = next
+}
+
+async function editDisplayName(wc: WorkingCopyEntry) {
+  const current = wc.displayName || getSmartLabel(wc)
+  const input = prompt('设置此工作副本的显示名称（留空则恢复自动推断）：', current || '')
+  if (input === null) return // 用户取消
+  const newName = input.trim() ? input.trim() : null
+  try {
+    await store.setDisplayName(wc.id, newName)
+  } catch (e) {
+    toast(e, '保存显示名称失败')
+  }
 }
 </script>
 
@@ -137,16 +162,16 @@ function toggleRoot(root: string) {
       <div v-if="items.length === 0" class="wc-empty">
         <EmptyState description="还没有工作副本，点上面按钮选一个本地目录" />
       </div>
-      <div v-for="group in groups" :key="group.root" class="wc-group">
-        <button class="root-row" type="button" @click="toggleRoot(group.root)">
+      <div v-for="group in groups" :key="group.key" class="wc-group">
+        <button class="root-row" type="button" @click="toggleRoot(group.key)">
           <ChevronDown
-            :class="['root-chevron', { collapsed: collapsedRoots.has(group.root) }]"
+            :class="['root-chevron', { collapsed: collapsedRoots.has(group.key) }]"
           />
           <FolderGit2 class="root-icon" />
-          <span class="root-name" :title="group.root">{{ group.label }}</span>
+          <span class="root-name" :title="group.key.startsWith('local:') ? '本地项目分组：' + group.label : group.key">{{ group.label }}</span>
           <span class="root-count mono">{{ group.copies.length }}</span>
         </button>
-        <div v-if="!collapsedRoots.has(group.root)" class="copy-list">
+        <div v-if="!collapsedRoots.has(group.key)" class="copy-list">
           <div
             v-for="wc in group.copies"
             :key="wc.id"
@@ -156,10 +181,14 @@ function toggleRoot(root: string) {
             <div class="wc-row-main">
               <HardDrive class="wc-icon" />
               <div class="wc-text">
-                <div class="wc-name" :title="wc.path">{{ shortPath(wc.path) }}</div>
+                <div class="wc-name" :title="fullTitle(wc)">{{ getSmartLabel(wc) }}</div>
                 <div class="wc-meta">
                   <span v-if="wc.revision" class="meta-rev mono">r{{ wc.revision }}</span>
-                  <span v-if="wc.url" class="wc-url mono" :title="wc.url">{{ wc.url }}</span>
+                  <span
+                    v-if="getSmartSubtitle(wc)"
+                    class="wc-url mono"
+                    :title="wc.relativeUrl || wc.url || ''"
+                  >{{ getSmartSubtitle(wc) }}</span>
                 </div>
               </div>
               <div class="wc-actions" @click.stop>
@@ -176,6 +205,21 @@ function toggleRoot(root: string) {
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>重新读取 svn info</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        class="row-icon-btn"
+                        @click="editDisplayName(wc)"
+                      >
+                        <Pencil class="icon-xs" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>编辑显示名称（自动推断或自定义）</TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
                 <TooltipProvider>
