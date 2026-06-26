@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Component } from 'vue'
 
 export interface ContextMenuItem {
@@ -25,8 +25,26 @@ const emit = defineEmits<{
 
 const menuRef = ref<HTMLElement | null>(null)
 
-// 防止菜单超出视口：根据自身尺寸把锚点向内收
-const position = computed(() => ({ left: `${props.x}px`, top: `${props.y}px` }))
+// 实际渲染坐标：打开后按菜单尺寸与视口边界修正，避免底部/右侧被裁切点不到
+const left = ref(0)
+const top = ref(0)
+const position = computed(() => ({ left: `${left.value}px`, top: `${top.value}px` }))
+
+const VIEWPORT_MARGIN = 8
+
+async function reposition() {
+  // 先用锚点摆放，再在下一帧拿到真实尺寸做钳制
+  left.value = props.x
+  top.value = props.y
+  await nextTick()
+  const el = menuRef.value
+  if (!el) return
+  const { width, height } = el.getBoundingClientRect()
+  const maxLeft = window.innerWidth - width - VIEWPORT_MARGIN
+  const maxTop = window.innerHeight - height - VIEWPORT_MARGIN
+  left.value = Math.max(VIEWPORT_MARGIN, Math.min(props.x, maxLeft))
+  top.value = Math.max(VIEWPORT_MARGIN, Math.min(props.y, maxTop))
+}
 
 function close() {
   emit('update:open', false)
@@ -59,6 +77,7 @@ watch(
   () => props.open,
   (open) => {
     if (open) {
+      reposition()
       // 捕获阶段监听，避免与行点击冲突
       document.addEventListener('pointerdown', onPointerDown, true)
       document.addEventListener('keydown', onKeydown, true)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { RefreshCw } from 'lucide-vue-next'
+import { onMounted, ref, watch } from 'vue'
+import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,9 +11,9 @@ import DiffViewer from '../components/DiffViewer.vue'
 import { api } from '../api/svn'
 import { useErrorToast } from '../composables/use-error-toast'
 import { createGeneration } from '../composables/use-request-generation'
-import type { SvnLogEntry, WorkingCopyEntry } from '../types/svn'
+import type { LogTarget, SvnLogEntry, SvnLogPath } from '../types/svn'
 
-const props = defineProps<{ workingCopy: WorkingCopyEntry }>()
+const props = defineProps<{ target: LogTarget }>()
 const toast = useErrorToast()
 
 const entries = ref<SvnLogEntry[]>([])
@@ -25,13 +25,8 @@ const revisionRange = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
 
-const selectedRev = ref<number | null>(null)
-const diffText = ref<string | null>(null)
-const diffLoading = ref(false)
-
-const selected = computed(() =>
-  selectedRev.value != null ? entries.value.find((e) => e.revision === selectedRev.value) : null,
-)
+// 展开的提交（展开后内联显示其改动文件）
+const expanded = ref<Set<number>>(new Set())
 
 const logGen = createGeneration()
 
@@ -40,7 +35,7 @@ async function reload() {
   loading.value = true
   try {
     const result = await api.log({
-      path: props.workingCopy.path,
+      path: props.target.target,
       limit: limit.value || 50,
       search: search.value || undefined,
       author: author.value || undefined,
@@ -51,9 +46,10 @@ async function reload() {
     })
     if (!logGen.isCurrent(token)) return
     entries.value = result
-    if (entries.value.length > 0 && selectedRev.value == null) {
-      selectedRev.value = entries.value[0].revision
-    }
+    // 默认展开最新一条，方便一眼看到最近改了哪些文件
+    const next = new Set<number>()
+    if (result.length > 0) next.add(result[0].revision)
+    expanded.value = next
   } catch (e) {
     if (!logGen.isCurrent(token)) return
     toast(e, '加载历史失败')
@@ -62,81 +58,94 @@ async function reload() {
   }
 }
 
-// 按 WC.id 暂存查询条件与选中，切回时恢复
-type LogViewState = {
-  selectedRev: number | null
-  search: string
-  author: string
-  revisionRange: string
-  dateFrom: string
-  dateTo: string
-  limit: number
-}
-const wcLogState = new Map<string, LogViewState>()
-
-function snapshotLogState(id: string) {
-  wcLogState.set(id, {
-    selectedRev: selectedRev.value,
-    search: search.value,
-    author: author.value,
-    revisionRange: revisionRange.value,
-    dateFrom: dateFrom.value,
-    dateTo: dateTo.value,
-    limit: limit.value,
-  })
-}
-
-function restoreLogState(id: string) {
-  const saved = wcLogState.get(id)
-  if (saved) {
-    selectedRev.value = saved.selectedRev
-    search.value = saved.search
-    author.value = saved.author
-    revisionRange.value = saved.revisionRange
-    dateFrom.value = saved.dateFrom
-    dateTo.value = saved.dateTo
-    limit.value = saved.limit
-  } else {
-    selectedRev.value = null
+// 切换日志目标时回到列表态、清空筛选并重新加载
+watch(
+  () => props.target.target,
+  () => {
+    fileDiff.value = null
     search.value = ''
     author.value = ''
     revisionRange.value = ''
     dateFrom.value = ''
     dateTo.value = ''
-    limit.value = 50
-  }
-  diffText.value = null
-}
-
-watch(
-  () => props.workingCopy.id,
-  (newId, oldId) => {
-    if (oldId) snapshotLogState(oldId)
-    restoreLogState(newId)
     reload()
   },
 )
-
 onMounted(reload)
 
-const revDiffGen = createGeneration()
+function toggle(rev: number) {
+  const next = new Set(expanded.value)
+  if (next.has(rev)) {
+    next.delete(rev)
+  } else {
+    next.add(rev)
+  }
+  expanded.value = next
+}
 
-watch(selectedRev, async (rev) => {
-  const token = revDiffGen.next()
+// ===== 单文件 diff（全屏左右对比）=====
+interface FileDiffState {
+  rev: number
+  path: string // repo-root-relative
+  name: string // 文件名，用于语言识别与头部展示
+  mode: 'split' | 'unified'
+}
+const fileDiff = ref<FileDiffState | null>(null)
+const baseContent = ref<string | null>(null)
+const currentContent = ref<string | null>(null)
+const diffText = ref<string | null>(null)
+const diffLoading = ref(false)
+const diffGen = createGeneration()
+
+// 把 log 给的 repo-root-relative path 拼成完整文件 URL（逐段编码，处理空格/中文）
+function fileUrl(path: string): string | null {
+  const root = props.target.repositoryRoot?.replace(/\/+$/, '')
+  if (!root) {
+    return null
+  }
+  const encoded = path.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+  return `${root}/${encoded}`
+}
+
+async function openFileDiff(rev: number, p: SvnLogPath) {
+  const name = p.path.split('/').filter(Boolean).pop() ?? p.path
+  const url = fileUrl(p.path)
+  // 有完整文件 URL 才能取两版全文做左右对比；否则退回 unified 整版本 diff
+  fileDiff.value = { rev, path: p.path, name, mode: url ? 'split' : 'unified' }
+
+  const token = diffGen.next()
+  baseContent.value = null
+  currentContent.value = null
   diffText.value = null
-  if (rev == null) return
   diffLoading.value = true
   try {
-    const result = await api.diffRevision(props.workingCopy.path, rev)
-    if (!revDiffGen.isCurrent(token)) return
-    diffText.value = result
+    if (url) {
+      // 新增文件在 N-1 不存在、删除文件在 N 不存在 —— cat 失败都按空内容处理
+      const [base, cur, dt] = await Promise.all([
+        api.catRevision(url, Math.max(rev - 1, 0)).catch(() => ''),
+        api.catRevision(url, rev).catch(() => ''),
+        api.diffRevision(url, rev).catch(() => ''),
+      ])
+      if (!diffGen.isCurrent(token)) return
+      baseContent.value = base
+      currentContent.value = cur
+      diffText.value = dt
+    } else {
+      const dt = await api.diffRevision(props.target.target, rev)
+      if (!diffGen.isCurrent(token)) return
+      diffText.value = dt
+    }
   } catch (e) {
-    if (!revDiffGen.isCurrent(token)) return
-    toast(e, '加载 revision diff 失败')
+    if (!diffGen.isCurrent(token)) return
+    toast(e, '加载文件差异失败')
   } finally {
-    if (revDiffGen.isCurrent(token)) diffLoading.value = false
+    if (diffGen.isCurrent(token)) diffLoading.value = false
   }
-})
+}
+
+function backToList() {
+  fileDiff.value = null
+}
 
 function formatDate(d?: string | null) {
   if (!d) return ''
@@ -145,6 +154,14 @@ function formatDate(d?: string | null) {
   } catch {
     return d
   }
+}
+
+function firstLine(msg?: string | null) {
+  return (msg ?? '').split('\n')[0] || '(无消息)'
+}
+
+function hasMoreLines(msg?: string | null) {
+  return !!msg && msg.split('\n').length > 1
 }
 
 function actionClass(a: string) {
@@ -165,220 +182,270 @@ function actionClass(a: string) {
 
 <template>
   <div class="log-view">
-    <section class="left">
-      <div class="toolbar">
-        <Input v-model="search" placeholder="关键词" />
-        <Input v-model="author" placeholder="作者" />
+    <header class="log-head">
+      <div class="head-title">
+        <Badge variant="secondary">{{ target.kind === 'wc' ? '工作副本' : '远端' }}</Badge>
+        <span class="title mono" :title="target.target">{{ target.title }}</span>
+      </div>
+      <div class="head-filters">
+        <Input v-model="search" placeholder="关键词" class="f-search" @keyup.enter="reload" />
+        <Input v-model="author" placeholder="作者" class="f-author" @keyup.enter="reload" />
+        <Input v-model="revisionRange" placeholder="HEAD:1" class="f-range" @keyup.enter="reload" />
         <Input
           :model-value="limit"
           type="number"
           min="1"
           max="500"
-          class="limit-input"
+          class="f-limit"
           @update:model-value="(v) => (limit = Number(v) || 50)"
+          @keyup.enter="reload"
         />
-        <Input v-model="revisionRange" placeholder="HEAD:1" />
+        <Input v-model="dateFrom" placeholder="起 2026-01-01" class="f-date" @keyup.enter="reload" />
+        <Input v-model="dateTo" placeholder="止 2026-05-07" class="f-date" @keyup.enter="reload" />
         <Button size="sm" variant="ghost" class="refresh-btn" @click="reload">
           <RefreshCw class="icon-sm" />
         </Button>
       </div>
-      <div class="toolbar secondary">
-        <Input v-model="dateFrom" placeholder="开始日期 2026-01-01" />
-        <Input v-model="dateTo" placeholder="结束日期 2026-05-07" />
-      </div>
-      <div class="list">
-        <LoadingSpinner v-if="loading" />
-        <EmptyState v-else-if="entries.length === 0" description="暂无历史" />
-        <div
-          v-for="e in entries"
-          :key="e.revision"
-          :class="['rev-item', { active: selectedRev === e.revision }]"
-          @click="selectedRev = e.revision"
-        >
-          <div class="rev-head">
-            <span class="rev-badge mono">r{{ e.revision }}</span>
+    </header>
+
+    <!-- 列表态：全宽提交列表，每条可展开看改动文件 -->
+    <div v-if="!fileDiff" class="commit-list">
+      <LoadingSpinner v-if="loading" />
+      <EmptyState v-else-if="entries.length === 0" description="暂无历史" />
+      <template v-else>
+        <div v-for="e in entries" :key="e.revision" class="commit">
+          <button
+            type="button"
+            :class="['commit-row', { current: e.revision === target.currentRevision }]"
+            @click="toggle(e.revision)"
+          >
+            <component
+              :is="expanded.has(e.revision) ? ChevronDown : ChevronRight"
+              class="chev"
+            />
+            <span class="rev mono">r{{ e.revision }}</span>
+            <span class="msg">{{ firstLine(e.message) }}</span>
+            <span class="spacer" />
+            <Badge v-if="e.revision === target.currentRevision" class="current-badge">
+              当前副本
+            </Badge>
             <span class="author mono">{{ e.author ?? '-' }}</span>
-            <span class="date">{{ formatDate(e.date) }}</span>
-          </div>
-          <div class="msg">{{ (e.message ?? '').split('\n')[0] || '(无消息)' }}</div>
-        </div>
-      </div>
-    </section>
-    <section class="right">
-      <div v-if="selected" class="rev-detail">
-        <div class="rev-meta">
-          <Badge variant="default">r{{ selected.revision }}</Badge>
-          <span class="author mono">{{ selected.author ?? '-' }}</span>
-          <span class="date">{{ formatDate(selected.date) }}</span>
-        </div>
-        <div class="rev-message">{{ selected.message ?? '' }}</div>
-        <div class="rev-files">
-          <div class="files-title">变更文件 ({{ selected.paths.length }})</div>
-          <div v-for="p in selected.paths" :key="p.path" class="file-line">
-            <span :class="['action-pill mono', actionClass(p.action)]">{{ p.action }}</span>
-            <span class="path mono">{{ p.path }}</span>
+            <span class="date mono">{{ formatDate(e.date) }}</span>
+            <span class="filecount mono">{{ e.paths.length }} 文件</span>
+          </button>
+
+          <div v-if="expanded.has(e.revision)" class="commit-body">
+            <div v-if="hasMoreLines(e.message)" class="full-msg">{{ e.message }}</div>
+            <EmptyState v-if="e.paths.length === 0" description="该版本无文件变更" />
+            <div
+              v-for="p in e.paths"
+              :key="p.path"
+              class="file-row"
+              :title="`双击查看 ${p.path} 在 r${e.revision} 的改动`"
+              @dblclick="openFileDiff(e.revision, p)"
+            >
+              <span :class="['action-pill mono', actionClass(p.action)]">{{ p.action }}</span>
+              <span class="path mono">{{ p.path }}</span>
+            </div>
           </div>
         </div>
+      </template>
+    </div>
+
+    <!-- 差异态：双击文件后整块铺满主区域 -->
+    <div v-else class="file-diff">
+      <div class="diff-bar">
+        <Button size="sm" variant="ghost" class="back-btn" @click="backToList">
+          <ArrowLeft class="icon-sm" />
+          返回
+        </Button>
+        <span class="diff-path mono" :title="fileDiff.path">{{ fileDiff.path }}</span>
+        <Badge variant="default" class="mono">r{{ fileDiff.rev }}</Badge>
       </div>
-      <div class="rev-diff">
+      <div class="diff-host">
         <DiffViewer
+          :key="`${fileDiff.rev}:${fileDiff.path}`"
           :diff-text="diffText"
-          :filename="selected ? `r${selected.revision}` : null"
+          :base-content="baseContent"
+          :current-content="currentContent"
+          :filename="fileDiff.name"
           :loading="diffLoading"
+          :initial-mode="fileDiff.mode"
         />
       </div>
-    </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .log-view {
-  display: grid;
-  grid-template-columns: 380px 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
   background: var(--mat-content);
 }
-.left {
+
+/* ===== 头部：标题 + 筛选 ===== */
+.log-head {
+  flex: none;
   display: flex;
   flex-direction: column;
-  border-right: var(--hairline) solid var(--stroke-soft);
-  background: var(--mat-content);
-  min-height: 0;
-}
-.toolbar {
-  display: flex;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
   background: var(--mat-toolbar);
   backdrop-filter: var(--vibrancy-toolbar);
   -webkit-backdrop-filter: var(--vibrancy-toolbar);
 }
-.toolbar:not(.secondary) {
-  border-bottom: var(--hairline) solid var(--stroke-soft);
+.head-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
-.toolbar.secondary {
-  padding-top: 0;
-  padding-bottom: 8px;
-  border-bottom: var(--hairline) solid var(--stroke-soft);
+.head-title .title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-callout);
+  color: var(--fg-muted);
 }
-.refresh-btn {
-  flex: none;
+.head-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
+.f-search { width: 180px; }
+.f-author { width: 120px; }
+.f-range { width: 96px; }
+.f-limit { width: 72px; }
+.f-date { width: 130px; }
+.refresh-btn { flex: none; }
 .icon-sm {
   width: 13px;
   height: 13px;
 }
-.list {
+
+/* ===== 提交列表 ===== */
+.commit-list {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 4px 0;
+  padding: 4px 0 12px;
 }
-.limit-input {
-  width: 80px;
-  flex: none;
+.commit {
+  border-bottom: var(--hairline) solid var(--stroke-soft);
 }
-.rev-item {
-  padding: 7px 12px;
-  margin: 1px 6px;
-  border-radius: var(--radius-row);
+.commit-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: inherit;
   cursor: default;
   transition: background-color 120ms ease-out;
 }
-.rev-item:hover {
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
+.commit-row:hover {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
 }
-.rev-item.active {
-  background: var(--accent);
-}
-.rev-item.active .author,
-.rev-item.active .date,
-.rev-item.active .msg,
-.rev-item.active .rev-badge {
-  color: #fff;
-}
-.rev-item.active .rev-badge {
-  background: rgba(255, 255, 255, 0.22);
-  border-color: rgba(255, 255, 255, 0.3);
-}
-.rev-head {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  font-size: var(--fs-caption);
-}
-.rev-badge {
-  font-size: var(--fs-caption);
-  font-weight: 500;
-  padding: 1px 6px;
-  border-radius: var(--radius-pill);
+/* 当前工作副本所在版本：左侧 accent 条 + 轻底色，一眼可辨 */
+.commit-row.current {
   background: var(--accent-soft);
-  color: var(--accent);
-  border: var(--hairline) solid color-mix(in srgb, var(--accent) 28%, transparent);
-  line-height: 1.3;
+  box-shadow: inset 3px 0 0 var(--accent);
 }
-.author {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.chev {
+  width: 14px;
+  height: 14px;
+  flex: none;
   color: var(--fg-muted);
 }
-.date {
-  color: var(--fg-subtle);
+.rev {
+  flex: none;
+  font-weight: 600;
+  font-size: var(--fs-callout);
+  color: var(--accent);
+  font-feature-settings: 'tnum';
 }
 .msg {
-  color: var(--fg-strong);
-  font-size: var(--fs-body);
-  margin-top: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.right {
-  display: grid;
-  grid-template-rows: auto 1fr;
-  min-height: 0;
-}
-.rev-detail {
-  padding: 12px 16px;
-  border-bottom: var(--hairline) solid var(--stroke-soft);
-  background: var(--mat-content);
-  max-height: 40%;
-  overflow: auto;
-}
-.rev-meta {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  font-size: var(--fs-callout);
-  color: var(--fg-muted);
-}
-.rev-message {
-  margin-top: 8px;
-  white-space: pre-wrap;
   font-size: var(--fs-body);
+  color: var(--fg-strong);
+}
+.spacer {
+  flex: 1;
+}
+.current-badge {
+  flex: none;
+  height: 18px;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+}
+.commit-row .author {
+  flex: none;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: var(--fs-caption);
+}
+.commit-row .date {
+  flex: none;
+  color: var(--fg-subtle);
+  font-size: var(--fs-caption);
+}
+.filecount {
+  flex: none;
+  color: var(--fg-subtle);
+  font-size: var(--fs-caption);
+  font-feature-settings: 'tnum';
+}
+
+/* ===== 展开区：完整消息 + 文件列表 ===== */
+.commit-body {
+  padding: 2px 14px 10px 38px;
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
+}
+.full-msg {
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--mat-content);
+  border: var(--hairline) solid var(--stroke-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--fs-callout);
   color: var(--fg);
   line-height: 1.5;
 }
-.rev-files {
-  margin-top: 12px;
-}
-.files-title {
-  font-size: var(--fs-caption);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-  margin-bottom: 6px;
-}
-.file-line {
+.file-row {
   display: flex;
-  gap: 8px;
   align-items: center;
-  font-size: var(--fs-callout);
-  padding: 2px 0;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  cursor: default;
+  transition: background-color 120ms ease-out;
+}
+.file-row:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .action-pill {
   display: inline-flex;
@@ -417,13 +484,48 @@ function actionClass(a: string) {
   color: var(--fg-muted);
   border-color: var(--stroke-soft);
 }
-.path {
+.file-row .path {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--fs-callout);
   color: var(--fg);
 }
-.rev-diff {
+
+/* ===== 文件差异态 ===== */
+.file-diff {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.diff-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  background: var(--mat-toolbar);
+}
+.back-btn {
+  flex: none;
+  gap: 4px;
+}
+.diff-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-size: var(--fs-callout);
+  color: var(--fg-strong);
+}
+.diff-host {
+  flex: 1;
   min-height: 0;
 }
 </style>

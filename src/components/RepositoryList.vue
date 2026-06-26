@@ -2,8 +2,6 @@
 import { onMounted, ref } from 'vue'
 import {
   Cloud,
-  Download,
-  FolderTree,
   Pencil,
   Plug,
   Plus,
@@ -28,13 +26,15 @@ import { api, describeError } from '../api/svn'
 import { useRepositoriesStore } from '../stores/repositories'
 import type { RepositoryEntry } from '../types/svn'
 
-const emit = defineEmits<{
-  checkout: [repo: RepositoryEntry]
-  browse: [repo: RepositoryEntry]
-}>()
-
 const store = useRepositoriesStore()
 const toast = useAppToast()
+
+const emit = defineEmits<{ select: [id: string] }>()
+
+function selectRepo(id: string) {
+  store.select(id)
+  emit('select', id)
+}
 
 const showModal = ref(false)
 const editingId = ref<string | undefined>()
@@ -130,7 +130,7 @@ async function remove(id: string) {
         v-for="repo in store.items"
         :key="repo.id"
         :class="['repo-item', { active: repo.id === store.selectedId }]"
-        @click="emit('browse', repo)"
+        @click="selectRepo(repo.id)"
       >
         <Cloud class="repo-icon" />
         <div class="repo-text">
@@ -158,36 +158,6 @@ async function remove(id: string) {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>测试连接</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  class="row-icon-btn"
-                  @click="emit('browse', repo)"
-                >
-                  <FolderTree class="icon-xs" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>浏览</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  class="row-icon-btn"
-                  @click="emit('checkout', repo)"
-                >
-                  <Download class="icon-xs" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>检出</TooltipContent>
             </Tooltip>
           </TooltipProvider>
           <TooltipProvider>
@@ -310,12 +280,12 @@ async function remove(id: string) {
   padding: 6px 8px;
   border-radius: var(--radius-row);
   background: transparent;
-  cursor: pointer;
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) auto;
   align-items: start;
   gap: 8px;
   min-height: 36px;
+  cursor: pointer;
   transition: background-color 120ms ease-out;
 }
 .repo-item:hover {

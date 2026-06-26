@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ChevronRight, Folder, FileText, X } from 'lucide-vue-next'
+import { ArrowLeft, ChevronRight, DownloadCloud, Folder, FileText, ScrollText, X } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
+import ContextMenu, { type ContextMenuItem } from '@/components/ui-local/ContextMenu.vue'
+import LogView from './LogView.vue'
 import { useAppToast } from '@/composables/use-app-toast'
 import { api, describeError } from '../api/svn'
-import type { RemoteListEntry, RepositoryEntry } from '../types/svn'
+import type { LogTarget, RemoteListEntry, RepositoryEntry } from '../types/svn'
 
 const props = defineProps<{ repository: RepositoryEntry | null }>()
 const emit = defineEmits<{ checkout: [repo: RepositoryEntry] }>()
@@ -117,10 +119,72 @@ function checkoutCurrent() {
   })
 }
 
+// 对某个远端目录发起检出（文件不支持检出）
+function checkoutEntry(entry: RemoteListEntry) {
+  if (!props.repository) return
+  emit('checkout', { ...props.repository, url: entry.url })
+}
+
+// ===== 行右键菜单 =====
+const ctxOpen = ref(false)
+const ctxX = ref(0)
+const ctxY = ref(0)
+const ctxEntry = ref<RemoteListEntry | null>(null)
+
+const ctxItems = computed<ContextMenuItem[]>(() => {
+  const isDir = ctxEntry.value?.kind === 'dir'
+  return [
+    { key: 'checkout', label: '检出到本地', icon: DownloadCloud, disabled: !isDir },
+    { key: 'log', label: '查看日志', icon: ScrollText },
+  ]
+})
+
+function openRowContextMenu(event: MouseEvent, entry: RemoteListEntry) {
+  ctxEntry.value = entry
+  selected.value = entry
+  ctxX.value = event.clientX
+  ctxY.value = event.clientY
+  ctxOpen.value = true
+}
+
+function onCtxSelect(key: string) {
+  const entry = ctxEntry.value
+  if (!entry) return
+  if (key === 'checkout') checkoutEntry(entry)
+  else if (key === 'log') openLog(entry)
+}
+
+// ===== 远端日志：内嵌主区域（替代旧弹窗）=====
+const logTarget = ref<LogTarget | null>(null)
+
+async function openLog(entry: RemoteListEntry) {
+  // 先取仓库根，LogView 才能把 log 的 repo-root-relative 路径拼成文件 URL 做单文件 diff
+  let repositoryRoot: string | null = null
+  try {
+    const info = await api.info(entry.url)
+    repositoryRoot = info.repositoryRoot
+  } catch (e) {
+    // 取根失败不阻断查看日志，只是单文件左右对比会退回 unified
+    toast.error('读取仓库信息失败', describeError(e))
+  }
+  logTarget.value = {
+    kind: 'remote',
+    target: entry.url,
+    title: entry.name,
+    repositoryRoot,
+    currentRevision: null,
+  }
+}
+
+function closeLog() {
+  logTarget.value = null
+}
+
 watch(
   () => props.repository?.id,
   () => {
     if (!props.repository) return
+    logTarget.value = null
     currentUrl.value = repoRoot.value
     manualUrl.value = repoRoot.value
     load(repoRoot.value)
@@ -132,6 +196,21 @@ watch(
 <template>
   <div class="remote-browser">
     <div v-if="!repository" class="empty-pane">先在左侧选择一个远端仓库</div>
+
+    <!-- 远端日志：内嵌主区域展示，替代旧的弹窗形态 -->
+    <template v-else-if="logTarget">
+      <header class="browser-toolbar">
+        <Button size="sm" variant="ghost" @click="closeLog">
+          <ArrowLeft class="icon-sm" /> 返回目录
+        </Button>
+        <div class="repo-title">
+          <Badge variant="secondary">{{ logTarget.title }}</Badge>
+          <span class="mono url" :title="logTarget.target">{{ logTarget.target }}</span>
+        </div>
+      </header>
+      <LogView :target="logTarget" class="remote-log-view" />
+    </template>
+
     <template v-else>
       <header class="browser-toolbar">
         <div class="repo-title">
@@ -180,6 +259,7 @@ watch(
                 :class="['remote-row', { active: selected?.url === entry.url }]"
                 @click="selectEntry(entry)"
                 @dblclick="previewEntry(entry)"
+                @contextmenu.prevent="openRowContextMenu($event, entry)"
               >
                 <component
                   :is="entry.kind === 'dir' ? Folder : FileText"
@@ -208,6 +288,15 @@ watch(
         </section>
       </div>
     </template>
+
+    <ContextMenu
+      v-model:open="ctxOpen"
+      :x="ctxX"
+      :y="ctxY"
+      :items="ctxItems"
+      @select="onCtxSelect"
+    />
+
   </div>
 </template>
 
@@ -302,6 +391,10 @@ watch(
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+.remote-log-view {
+  flex: 1;
+  min-height: 0;
 }
 .remote-list {
   background: var(--mat-content);
@@ -443,4 +536,82 @@ watch(
   text-align: center;
   font-size: var(--fs-callout);
 }
+
+/* ===== 远端日志弹窗 ===== */
+.remote-log-dialog {
+  width: 680px;
+  max-width: calc(100vw - 48px);
+  height: 600px;
+  max-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.remote-log-url {
+  flex: none;
+  font-size: var(--fs-caption);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-bottom: 6px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+}
+.remote-log-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 -4px;
+}
+.remote-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.remote-log-item {
+  padding: 10px 6px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+}
+.log-item-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-caption);
+}
+.log-author {
+  color: var(--fg);
+  font-weight: 500;
+}
+.log-date {
+  color: var(--fg-muted);
+}
+.log-message {
+  margin-top: 5px;
+  font-size: var(--fs-callout);
+  color: var(--fg-strong);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-paths {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: var(--fs-caption);
+  color: var(--fg-muted);
+}
+.log-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.path-action {
+  display: inline-block;
+  width: 16px;
+  font-weight: 600;
+  color: var(--fg-subtle);
+}
+.act-a .path-action { color: var(--success, #30a46c); }
+.act-d .path-action { color: var(--danger, #e5484d); }
+.act-m .path-action { color: var(--accent, #0a84ff); }
 </style>

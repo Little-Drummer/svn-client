@@ -506,57 +506,79 @@ code,
       inset 0 1px 1.5px rgba(0, 0, 0, 0.06);
   }
 
-  /* ----- Accent 主按钮（macOS NSButton .borderedProminent）----- */
+  /* ----- Accent 主按钮（macOS Big Sur+ .borderedProminent：
+         近乎纯色填充 + 顶部 specular 高光 + 同色系深一档描边 + 同色软投影，
+         hover/pressed 用整体明度变化，不做形变 ----- */
   .ctl-accent {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent) 86%, white 14%) 0%,
-        var(--accent) 50%,
-        color-mix(in srgb, var(--accent) 92%, black 8%) 100%
+        color-mix(in srgb, var(--accent) 94%, white 6%) 0%,
+        var(--accent) 55%,
+        color-mix(in srgb, var(--accent) 96%, black 4%) 100%
       );
     color: #fff;
-    box-shadow: var(--stroke-accent), 0 1px 1.5px rgba(0, 70, 180, 0.18);
+    box-shadow:
+      inset 0 0 0 0.5px color-mix(in srgb, var(--accent) 86%, black 14%),
+      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      0 0.5px 1px rgba(0, 0, 0, 0.06),
+      0 1.5px 4px color-mix(in srgb, var(--accent) 24%, transparent);
     border: 0;
-    text-shadow: 0 0.5px 0 rgba(0, 0, 0, 0.12);
   }
   .ctl-accent:hover:not(:disabled) {
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--accent-hover) 86%, white 14%) 0%,
-        var(--accent-hover) 50%,
-        color-mix(in srgb, var(--accent-hover) 92%, black 8%) 100%
-      );
+    filter: brightness(1.05);
   }
   .ctl-accent:active:not(:disabled) {
-    background: var(--accent-active);
-    box-shadow:
-      inset 0 0 0 0.5px rgba(0, 0, 0, 0.32),
-      inset 0 1.5px 2px rgba(0, 0, 0, 0.18);
+    filter: brightness(0.87) saturate(1.06);
   }
   .dark .ctl-accent {
+    box-shadow:
+      inset 0 0 0 0.5px rgba(0, 0, 0, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      0 0.5px 1px rgba(0, 0, 0, 0.3),
+      0 1.5px 5px color-mix(in srgb, var(--accent) 38%, transparent);
+  }
+  .dark .ctl-accent:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+  /* 禁用：macOS 规范是变灰 bezel，不是半透明的蓝 */
+  .ctl-accent:disabled,
+  .ctl-destructive:disabled {
+    background: color-mix(in srgb, var(--fg) 7%, transparent);
+    color: var(--fg-subtle);
+    box-shadow: inset 0 0 0 0.5px var(--stroke-soft);
     text-shadow: none;
   }
 
-  /* ----- Destructive 主按钮（红色 capsule）----- */
+  /* ----- Destructive 主按钮（红色，与 accent 同一套语言）----- */
   .ctl-destructive {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--danger) 86%, white 14%) 0%,
-        var(--danger) 50%,
-        color-mix(in srgb, var(--danger) 92%, black 8%) 100%
+        color-mix(in srgb, var(--danger) 94%, white 6%) 0%,
+        var(--danger) 55%,
+        color-mix(in srgb, var(--danger) 96%, black 4%) 100%
       );
     color: #fff;
-    box-shadow: var(--stroke-accent), 0 1px 1.5px rgba(180, 0, 0, 0.22);
+    box-shadow:
+      inset 0 0 0 0.5px color-mix(in srgb, var(--danger) 86%, black 14%),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 0.5px 1px rgba(0, 0, 0, 0.06),
+      0 1.5px 4px color-mix(in srgb, var(--danger) 22%, transparent);
     border: 0;
   }
+  .dark .ctl-destructive {
+    box-shadow:
+      inset 0 0 0 0.5px rgba(0, 0, 0, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 0.5px 1px rgba(0, 0, 0, 0.3),
+      0 1.5px 5px color-mix(in srgb, var(--danger) 34%, transparent);
+  }
   .ctl-destructive:hover:not(:disabled) {
-    filter: brightness(1.04);
+    filter: brightness(1.05);
   }
   .ctl-destructive:active:not(:disabled) {
-    filter: brightness(0.92);
+    filter: brightness(0.87) saturate(1.06);
   }
 
   /* ----- Secondary 浅灰胶囊（NSButton .bordered 简化版）----- */
@@ -621,6 +643,51 @@ code,
   .ctl-input:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* ----- Select（macOS NSPopUpButton 弹出按钮）-----
+     bezel 控件面 + 右侧 accent 圆角徽章内嵌上下双箭头，
+     这是 macOS 弹出菜单的标志性形态；菜单本体交给系统原生渲染 */
+  .ui-select {
+    appearance: none;
+    -webkit-appearance: none;
+    height: 26px;
+    padding: 0 28px 0 10px;
+    font-size: var(--fs-callout);
+    font-weight: 500;
+    color: var(--fg-strong);
+    background-color: var(--mat-elevated);
+    border: 0;
+    outline: none;
+    border-radius: 7px;
+    box-shadow: var(--stroke-control), var(--shadow-control);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23339dff'/%3E%3Cstop offset='1' stop-color='%23007aff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='16' height='16' rx='4.5' fill='url(%23g)'/%3E%3Cpath d='M5.4 6.4 8 4.1l2.6 2.3M5.4 9.6 8 11.9l2.6-2.3' fill='none' stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 5px center;
+    background-size: 16px 16px;
+    text-overflow: ellipsis;
+    transition:
+      background-color 120ms ease-out,
+      box-shadow 120ms ease-out,
+      filter 120ms ease-out;
+  }
+  .ui-select:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--mat-elevated) 94%, var(--fg) 6%);
+  }
+  .ui-select:active:not(:disabled) {
+    background-color: color-mix(in srgb, var(--mat-elevated) 88%, var(--fg) 12%);
+  }
+  .ui-select:focus-visible {
+    box-shadow:
+      inset 0 0 0 0.5px var(--accent),
+      0 0 0 3px var(--accent-ring);
+  }
+  .ui-select:disabled {
+    opacity: 0.5;
+    filter: grayscale(1);
+  }
+  .dark .ui-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23409cff'/%3E%3Cstop offset='1' stop-color='%230a84ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='16' height='16' rx='4.5' fill='url(%23g)'/%3E%3Cpath d='M5.4 6.4 8 4.1l2.6 2.3M5.4 9.6 8 11.9l2.6-2.3' fill='none' stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
 }
 

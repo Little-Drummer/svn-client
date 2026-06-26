@@ -1,6 +1,17 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type {
+  Project,
+  MergeRoute,
+  MergeRevision,
+  MergePreview,
+  PackageOptions,
+  PackageRevision,
+  PackageBuildResult,
+  PackageZipResult,
+  CapturePresetFile,
+  ConfigPreset,
+  PresetApplyPlan,
   SvnInfo,
   SvnLogEntry,
   SvnStatusEntry,
@@ -40,6 +51,39 @@ export const api = {
     invoke<WorkingCopyEntry>('refresh_working_copy', { id }),
   setWorkingCopyDisplayName: (id: string, displayName: string | null) =>
     invoke<WorkingCopyEntry>('set_working_copy_display_name', { id, displayName }),
+  listProjects: () => invoke<Project[]>('list_projects'),
+  scanAndAddProject: (path: string) =>
+    invoke<WorkingCopyEntry[]>('scan_and_add_project', { path }),
+
+  // 多级合并
+  mergeListRoutes: (projectName: string) =>
+    invoke<MergeRoute[]>('merge_list_routes', { projectName }),
+  mergeFetchRevisions: (route: MergeRoute) =>
+    invoke<MergeRevision[]>('merge_fetch_revisions', { route }),
+  mergePreview: (route: MergeRoute, entries: MergeRevision[], revisions: number[]) =>
+    invoke<MergePreview>('merge_preview', { route, entries, revisions }),
+  mergeExecute: (route: MergeRoute, revisions: number[], message: string) =>
+    invoke<string>('merge_execute', { route, revisions, message }),
+
+  // 增量打包
+  packageFetchRevisions: (restPath: string, limit?: number) =>
+    invoke<PackageRevision[]>('package_fetch_revisions', { restPath, limit }),
+  packageBuild: (restPath: string, options: PackageOptions, revisions: number[]) =>
+    invoke<PackageBuildResult>('package_build', { restPath, options, revisions }),
+  packageMakeZip: (baseDir: string, requirementName: string) =>
+    invoke<PackageZipResult>('package_make_zip', { baseDir, requirementName }),
+  packageCommitVersion: (restPath: string, version: string) =>
+    invoke<string>('package_commit_version', { restPath, version }),
+
+  // 本地开发配置预设（全局统一）
+  listConfigPresets: () => invoke<ConfigPreset[]>('list_config_presets'),
+  captureConfigPreset: (name: string, wcRoot: string, files: CapturePresetFile[]) =>
+    invoke<ConfigPreset>('capture_config_preset', { name, wcRoot, files }),
+  previewConfigPreset: (id: string, wcRoot: string) =>
+    invoke<PresetApplyPlan[]>('preview_config_preset', { id, wcRoot }),
+  applyConfigPreset: (id: string, wcRoot: string) =>
+    invoke<PresetApplyPlan[]>('apply_config_preset', { id, wcRoot }),
+  deleteConfigPreset: (id: string) => invoke<void>('delete_config_preset', { id }),
   listWorkingCopyFiles: (root: string) =>
     invoke<WorkingCopyFileEntry[]>('list_working_copy_files', { root }),
   createWorkingCopyFolder: (parentPath: string, name: string) =>
@@ -65,8 +109,11 @@ export const api = {
   diffRevision: (path: string, revision: number) =>
     invoke<string>('svn_get_diff_revision', { path, revision }),
   baseContent: (path: string) => invoke<string>('svn_get_base_content', { path }),
+  catRevision: (target: string, revision: number) =>
+    invoke<string>('svn_get_cat_revision', { target, revision }),
   readFileText: (path: string) => invoke<string>('read_file_text', { path }),
   revealInFileManager: (path: string) => invoke<void>('reveal_in_file_manager', { path }),
+  openInTerminal: (path: string) => invoke<void>('open_in_terminal', { path }),
   revert: (paths: string[]) => invoke<void>('svn_revert', { paths }),
   add: (paths: string[]) => invoke<void>('svn_add', { paths }),
   delete: (paths: string[]) => invoke<void>('svn_delete', { paths }),
@@ -84,6 +131,10 @@ export const api = {
     username?: string
     password?: string
   }) => invoke<string>('svn_start_checkout', params),
+  // 终止运行中的长任务；返回该任务当时是否仍在运行
+  cancelTask: (taskId: string) => invoke<boolean>('svn_cancel_task', { taskId }),
+  // 清理工作副本残留锁（终止任务后 E155004），完成后才返回
+  cleanup: (path: string) => invoke<void>('svn_cleanup', { path }),
 }
 
 export function describeError(err: unknown): string {

@@ -19,14 +19,16 @@ export const useStatusStore = defineStore('status', () => {
 
   // 当前生效的流式刷新 request_id，事件按它过滤，旧请求的批次直接丢弃
   let activeRequestId: string | null = null
-  let unlisten: UnlistenFn | null = null
+  // 持有 Promise 防重：并发调用若等 listen 返回才置位，会注册两个监听器导致条目重复
+  let listenerPromise: Promise<UnlistenFn> | null = null
 
   // 懒注册一次全局事件监听，store 生命周期与应用一致，无需反复 listen/unlisten
   async function ensureListener() {
-    if (unlisten) {
+    if (listenerPromise) {
+      await listenerPromise
       return
     }
-    unlisten = await listen<StatusStreamEvent>(STATUS_EVENT_NAME, (event) => {
+    listenerPromise = listen<StatusStreamEvent>(STATUS_EVENT_NAME, (event) => {
       const payload = event.payload
       if (payload.requestId !== activeRequestId) {
         return
@@ -44,6 +46,7 @@ export const useStatusStore = defineStore('status', () => {
           break
       }
     })
+    await listenerPromise
   }
 
   // 流式刷新：entry 分批到达即追加渲染，配合虚拟列表降低大工作副本首屏延迟

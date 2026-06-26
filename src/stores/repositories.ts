@@ -1,18 +1,29 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import { api } from '../api/svn'
+import { loadFocus, saveFocus } from '../lib/ui-state'
 import type { RepositoryEntry } from '../types/svn'
 
 export const useRepositoriesStore = defineStore('repositories', () => {
   const items = ref<RepositoryEntry[]>([])
-  const selectedId = ref<string | null>(null)
+  // 上次焦点在远端时恢复其选中
+  const initialFocus = loadFocus()
+  const selectedId = ref<string | null>(
+    initialFocus?.side === 'repo' ? initialFocus.id : null,
+  )
   const loading = ref(false)
+
+  const selected = computed(() => items.value.find((repo) => repo.id === selectedId.value) ?? null)
 
   async function reload() {
     loading.value = true
     try {
       items.value = await api.listRepositories()
+      // 持久化的选中项已不存在时清掉，避免高亮幽灵行
+      if (selectedId.value && !items.value.some((repo) => repo.id === selectedId.value)) {
+        selectedId.value = null
+      }
     } finally {
       loading.value = false
     }
@@ -39,7 +50,8 @@ export const useRepositoriesStore = defineStore('repositories', () => {
 
   function select(id: string | null) {
     selectedId.value = id
+    if (id) saveFocus({ side: 'repo', id })
   }
 
-  return { items, selectedId, loading, reload, save, remove, select }
+  return { items, selectedId, selected, loading, reload, save, remove, select }
 })

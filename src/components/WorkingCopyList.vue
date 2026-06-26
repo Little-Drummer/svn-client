@@ -3,12 +3,17 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import {
   ChevronDown,
+  DownloadCloud,
   Folder,
   FolderGit2,
+  FolderPlus,
+  FolderSearch,
   HardDrive,
   Pencil,
   Plus,
   RefreshCw,
+  ScrollText,
+  SquareTerminal,
   Trash2,
 } from 'lucide-vue-next'
 
@@ -16,9 +21,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
+import ContextMenu, { type ContextMenuItem } from '@/components/ui-local/ContextMenu.vue'
 import { confirm } from '@/composables/use-confirm-dialog'
+import { loadCollapsedNodes, saveCollapsedNodes } from '../lib/ui-state'
+import { api } from '../api/svn'
 import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useRepositoriesStore } from '../stores/repositories'
+import { useTasksStore } from '../stores/tasks'
 import { useErrorToast } from '../composables/use-error-toast'
 import type { WorkingCopyEntry } from '../types/svn'
 import {
@@ -35,14 +44,17 @@ const props = withDefaults(defineProps<{ showActive?: boolean }>(), { showActive
 
 const emit = defineEmits<{
   select: [id: string]
+  viewLog: [id: string]
 }>()
 
 const store = useWorkingCopiesStore()
 const repoStore = useRepositoriesStore()
+const tasksStore = useTasksStore()
 const toast = useErrorToast()
 
 const items = computed(() => store.items)
-const collapsedNodes = ref<Set<string>>(new Set())
+// 折叠的节点 key 从本地恢复，保持上次的展开/折叠形态
+const collapsedNodes = ref<Set<string>>(new Set(loadCollapsedNodes()))
 
 interface WorkingCopyTreeNode {
   key: string
@@ -208,6 +220,20 @@ async function pickAndAdd() {
   }
 }
 
+// 选一个项目根目录，自动识别其下 develop/test/produce × rest/database/updatesql 等所有分支模块
+async function pickAndScanProject() {
+  try {
+    const dir = await open({ directory: true, multiple: false, title: '选择项目根目录（自动识别所有分支）' })
+    if (!dir || typeof dir !== 'string') return
+    const touched = await store.scanProject(dir)
+    if (touched.length === 0) {
+      toast('未在该目录下识别到工作副本，请确认选的是项目根目录', '没有识别到分支')
+    }
+  } catch (e) {
+    toast(e, '扫描项目失败')
+  }
+}
+
 async function refresh(id: string) {
   try {
     await store.refresh(id)
@@ -251,6 +277,76 @@ function toggleNode(key: string) {
   if (next.has(key)) next.delete(key)
   else next.add(key)
   collapsedNodes.value = next
+  saveCollapsedNodes([...next])
+}
+
+// ===== 右键菜单 =====
+const ctxOpen = ref(false)
+const ctxX = ref(0)
+const ctxY = ref(0)
+const ctxWc = ref<WorkingCopyEntry | null>(null)
+
+const ctxItems: ContextMenuItem[] = [
+  { key: 'log', label: '查看日志', icon: ScrollText },
+  { key: 'sep1', separator: true, label: '' },
+  { key: 'reveal', label: '在访达中打开', icon: FolderSearch },
+  { key: 'terminal', label: '在终端中打开', icon: SquareTerminal },
+  { key: 'sep2', separator: true, label: '' },
+  { key: 'update', label: '从远程更新到本地', icon: DownloadCloud },
+]
+
+function openContextMenu(event: MouseEvent, wc: WorkingCopyEntry) {
+  ctxWc.value = wc
+  ctxX.value = event.clientX
+  ctxY.value = event.clientY
+  ctxOpen.value = true
+}
+
+async function onCtxSelect(key: string) {
+  const wc = ctxWc.value
+  if (!wc) return
+  switch (key) {
+    case 'log':
+      emit('viewLog', wc.id)
+      break
+    case 'reveal':
+      try {
+        await api.revealInFileManager(wc.path)
+      } catch (e) {
+        toast(e, '在访达中打开失败')
+      }
+      break
+    case 'terminal':
+      try {
+        await api.openInTerminal(wc.path)
+      } catch (e) {
+        toast(e, '在终端中打开失败')
+      }
+      break
+    case 'update':
+      try {
+        await launchUpdate(wc)
+      } catch (e) {
+        toast(e, '启动更新失败')
+      }
+      break
+  }
+}
+
+// 从右键菜单直接发起整副本更新，进度走统一任务面板，返回任务 id 供重试
+async function launchUpdate(wc: WorkingCopyEntry): Promise<string> {
+  const id = await api.startUpdate(wc.path)
+  const name = wc.displayName || getWorkingCopyLeafLabel(wc)
+  tasksStore.register({
+    taskId: id,
+    kind: 'update',
+    title: `更新 ${name} 到 HEAD`,
+    command: `svn update ${wc.path}`,
+    retry: () => launchUpdate(wc),
+  })
+  // 右键更新没有独立输出区，自动弹开任务中心让用户看到进度与结果
+  tasksStore.openCenter()
+  return id
 }
 
 // 内联编辑状态：彻底避开 prompt + tooltip + hover 的事件竞争问题
@@ -297,10 +393,16 @@ function cancelEdit() {
   <div class="wc-list">
     <div class="wc-section-head">
       <span class="section-title">工作副本</span>
-      <Button size="xs" variant="ghost" class="head-action" @click="pickAndAdd">
-        <Plus class="icon-xs" />
-        添加
-      </Button>
+      <div class="head-actions">
+        <Button size="xs" variant="ghost" class="head-action" title="选项目根目录，自动识别所有分支模块" @click="pickAndScanProject">
+          <FolderPlus class="icon-xs" />
+          项目
+        </Button>
+        <Button size="xs" variant="ghost" class="head-action" title="添加单个工作副本目录" @click="pickAndAdd">
+          <Plus class="icon-xs" />
+          添加
+        </Button>
+      </div>
     </div>
     <div class="wc-scroll">
       <div v-if="items.length === 0" class="wc-empty">
@@ -329,9 +431,17 @@ function cancelEdit() {
         </button>
         <div
           v-else
-          :class="['wc-item', { active: props.showActive && row.wc.id === store.selectedId }]"
+          :class="[
+            'wc-item',
+            {
+              active: props.showActive && row.wc.id === store.selectedId,
+              unavailable: row.wc.available === false,
+            },
+          ]"
           :style="{ marginLeft: copyIndent(row.depth) }"
+          :title="row.wc.available === false ? '路径不可用：磁盘卷可能未挂载' : undefined"
           @click="selectWc(row.wc.id)"
+          @contextmenu.prevent="openContextMenu($event, row.wc)"
         >
           <div class="wc-row-main">
             <HardDrive class="wc-icon" />
@@ -416,6 +526,14 @@ function cancelEdit() {
         </div>
       </template>
     </div>
+
+    <ContextMenu
+      v-model:open="ctxOpen"
+      :x="ctxX"
+      :y="ctxY"
+      :items="ctxItems"
+      @select="onCtxSelect"
+    />
   </div>
 </template>
 
@@ -442,6 +560,11 @@ function cancelEdit() {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--fg-muted);
+}
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .head-action {
   height: 22px;
@@ -545,6 +668,11 @@ function cancelEdit() {
 .wc-item.active {
   background: var(--accent);
   color: var(--fg-on-accent);
+}
+/* 路径不可用（卷未挂载/目录被删）：整行降饱和置灰，仍可点击查看提示 */
+.wc-item.unavailable {
+  opacity: 0.45;
+  filter: grayscale(0.6);
 }
 .wc-row-main {
   position: relative;

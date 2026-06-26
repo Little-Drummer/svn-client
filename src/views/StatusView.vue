@@ -2,6 +2,9 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ChevronRight,
   Copy,
   Eye,
@@ -109,20 +112,39 @@ const STATUS_CLASSES: Record<string, string> = {
   normal: 'status-muted',
 }
 
-const grouped = computed(() => {
-  const map = new Map<string, SvnStatusEntry[]>()
-  for (const e of statusStore.entries) {
-    const k = e.item || 'normal'
-    if (!map.has(k)) map.set(k, [])
-    map.get(k)!.push(e)
-  }
-  return STATUS_ORDER.filter((s) => map.has(s)).map((s) => ({
-    item: s,
-    label: STATUS_LABEL[s] ?? s,
-    className: STATUS_CLASSES[s] ?? 'status-muted',
-    entries: map.get(s)!.sort((a, b) => a.path.localeCompare(b.path)),
-  }))
+type FileSortKey = 'name' | 'modifiedAt' | 'size' | 'kind' | 'revision' | 'status' | 'author'
+type SortDirection = 'asc' | 'desc'
+
+const FILE_COLUMNS: { key: FileSortKey; label: string; className?: string }[] = [
+  { key: 'name', label: '名称', className: 'col-name' },
+  { key: 'modifiedAt', label: '修改时间', className: 'col-date' },
+  { key: 'size', label: '大小', className: 'col-size' },
+  { key: 'kind', label: '类型', className: 'col-kind' },
+  { key: 'revision', label: '修订版本', className: 'col-rev' },
+  { key: 'status', label: '状态', className: 'col-status' },
+  { key: 'author', label: '作者', className: 'col-author' },
+]
+
+const sortState = ref<{ key: FileSortKey; direction: SortDirection }>({
+  key: 'name',
+  direction: 'asc',
 })
+
+function toggleSort(key: FileSortKey) {
+  if (sortState.value.key === key) {
+    sortState.value = {
+      key,
+      direction: sortState.value.direction === 'asc' ? 'desc' : 'asc',
+    }
+    return
+  }
+  sortState.value = { key, direction: key === 'modifiedAt' || key === 'revision' ? 'desc' : 'asc' }
+}
+
+function sortIcon(key: FileSortKey) {
+  if (sortState.value.key !== key) return ArrowUpDown
+  return sortState.value.direction === 'asc' ? ArrowUp : ArrowDown
+}
 
 // 可提交的项（不能 commit unversioned/ignored/normal/missing/external）
 const COMMITTABLE = new Set([
@@ -152,40 +174,209 @@ const statusByPath = computed(() => {
   for (const entry of statusStore.entries) map.set(entry.path, entry)
   return map
 })
+
+const fileTreeByPath = computed(() => {
+  const map = new Map<string, WorkingCopyFileEntry>()
+  function visit(entries: WorkingCopyFileEntry[]) {
+    for (const entry of entries) {
+      map.set(entry.path, entry)
+      visit(entry.children)
+    }
+  }
+  visit(fileTree.value)
+  return map
+})
+
+function fileRevision(entry: WorkingCopyFileEntry) {
+  const status = statusByPath.value.get(entry.path)
+  return status?.commitRevision ?? status?.revision ?? entry.commitRevision ?? entry.revision ?? null
+}
+
+function fileAuthor(entry: WorkingCopyFileEntry) {
+  const status = statusByPath.value.get(entry.path)
+  return status?.commitAuthor ?? entry.commitAuthor ?? ''
+}
+
+function fileDate(entry: WorkingCopyFileEntry) {
+  return entry.modifiedAt ?? entry.commitDate ?? ''
+}
+
+function fileKindLabel(entry: WorkingCopyFileEntry) {
+  if (entry.kind === 'dir') return '文件夹'
+  const ext = entry.name.split('.').pop()?.toLowerCase() ?? ''
+  const map: Record<string, string> = {
+    ts: 'TypeScript 文件',
+    tsx: 'TypeScript 文件',
+    vue: 'Vue 文件',
+    js: 'JavaScript 文件',
+    jsx: 'JavaScript 文件',
+    json: 'JSON 文件',
+    md: 'Markdown 文件',
+    rs: 'Rust 文件',
+    css: '样式表',
+    scss: 'SCSS 样式表',
+    html: 'HTML 文件',
+    lock: '锁定文件',
+    txt: '文本文件',
+    png: '图片',
+    jpg: '图片',
+    jpeg: '图片',
+    gif: '图片',
+    svg: '矢量图片',
+  }
+  if (entry.name.endsWith('.lock')) return '锁定文件'
+  return map[ext] ?? '文档'
+}
+
+function formatFileSize(size?: number | null, kind?: string) {
+  if (kind === 'dir') return '--'
+  if (size == null) return '--'
+  if (size < 1024) return `${size} 字节`
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`
+  return `${(size / 1024 / 1024).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`
+}
+
+function formatFileDate(value?: string | null) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function changeFileEntry(entry: SvnStatusEntry) {
+  return fileTreeByPath.value.get(entry.path)
+}
+
+function changeRevision(entry: SvnStatusEntry) {
+  const file = changeFileEntry(entry)
+  return entry.commitRevision ?? entry.revision ?? file?.commitRevision ?? file?.revision ?? null
+}
+
+function changeAuthor(entry: SvnStatusEntry) {
+  return entry.commitAuthor ?? changeFileEntry(entry)?.commitAuthor ?? ''
+}
+
+function changeModifiedAt(entry: SvnStatusEntry) {
+  return changeFileEntry(entry)?.modifiedAt ?? entry.commitDate ?? ''
+}
+
+function changeSize(entry: SvnStatusEntry) {
+  return changeFileEntry(entry)?.size ?? null
+}
+
+function changeKindLabel(entry: SvnStatusEntry) {
+  const file = changeFileEntry(entry)
+  if (file) return fileKindLabel(file)
+  return shortName(entry.path).includes('.') ? '文档' : '项目'
+}
+
+function statusRank(item: string) {
+  const index = STATUS_ORDER.indexOf(item)
+  return index >= 0 ? index : STATUS_ORDER.length
+}
+
+function compareValues(a: string | number | null | undefined, b: string | number | null | undefined) {
+  if (typeof a === 'number' && typeof b === 'number') return a - b
+  return String(a).localeCompare(String(b), undefined, { sensitivity: 'base', numeric: true })
+}
+
+function fileSortValue(entry: WorkingCopyFileEntry, key: FileSortKey): string | number | null {
+  switch (key) {
+    case 'name':
+      return entry.name
+    case 'modifiedAt':
+      return Date.parse(fileDate(entry)) || null
+    case 'size':
+      return entry.kind === 'dir' ? null : (entry.size ?? null)
+    case 'kind':
+      return fileKindLabel(entry)
+    case 'revision':
+      return fileRevision(entry)
+    case 'status':
+      return statusRank(fileStatus(entry.path))
+    case 'author':
+      return fileAuthor(entry)
+  }
+}
+
+function changeSortValue(entry: SvnStatusEntry, key: FileSortKey): string | number | null {
+  switch (key) {
+    case 'name':
+      return shortName(entry.path)
+    case 'modifiedAt':
+      return Date.parse(changeModifiedAt(entry)) || null
+    case 'size':
+      return changeSize(entry)
+    case 'kind':
+      return changeKindLabel(entry)
+    case 'revision':
+      return changeRevision(entry)
+    case 'status':
+      return statusRank(entry.item)
+    case 'author':
+      return changeAuthor(entry)
+  }
+}
+
+function compareBySort<T>(
+  a: T,
+  b: T,
+  getValue: (item: T, key: FileSortKey) => string | number | null,
+  getName: (item: T) => string,
+) {
+  const { key, direction } = sortState.value
+  const aValue = getValue(a, key)
+  const bValue = getValue(b, key)
+  const aEmpty = aValue == null || aValue === ''
+  const bEmpty = bValue == null || bValue === ''
+  if (aEmpty && bEmpty) return getName(a).localeCompare(getName(b), undefined, { sensitivity: 'base', numeric: true })
+  if (aEmpty && !bEmpty) return 1
+  if (!aEmpty && bEmpty) return -1
+  const result = compareValues(aValue, bValue)
+  if (result !== 0) return direction === 'asc' ? result : -result
+  return getName(a).localeCompare(getName(b), undefined, { sensitivity: 'base', numeric: true })
+}
+
+const sortedFileTree = computed(() => {
+  // 排序只作用于同级节点，避免破坏目录层级和展开状态。
+  function sortLevel(entries: WorkingCopyFileEntry[]): WorkingCopyFileEntry[] {
+    return entries
+      .map((entry) => ({ ...entry, children: sortLevel(entry.children) }))
+      .sort((a, b) => compareBySort(a, b, fileSortValue, (entry) => entry.name))
+  }
+  return sortLevel(fileTree.value)
+})
+
 const flatFileTree = computed(() => {
   const rows: { entry: WorkingCopyFileEntry; depth: number }[] = []
   function visit(entries: WorkingCopyFileEntry[], depth: number) {
     for (const entry of entries) {
+      // 关闭未跟踪开关时，文件树里整块未跟踪/忽略的节点一并隐藏，保持与变更视图一致
+      if (!statusStore.showUnversioned && (entry.svnItem === 'unversioned' || entry.svnItem === 'ignored')) {
+        continue
+      }
       rows.push({ entry, depth })
       if (entry.kind === 'dir' && expandedDirs.value.has(entry.path)) {
         visit(entry.children, depth + 1)
       }
     }
   }
-  visit(fileTree.value, 0)
+  visit(sortedFileTree.value, 0)
   return rows
 })
 
-// 变更视图扁平化：把 group-header 和 entry 合成一条线性数组，便于虚拟滚动
-type ChangeRow =
-  | { kind: 'header'; item: string; label: string; className: string; count: number }
-  | { kind: 'entry'; entry: SvnStatusEntry }
+type ChangeRow = { kind: 'entry'; entry: SvnStatusEntry }
 
 const flatChanges = computed<ChangeRow[]>(() => {
-  const rows: ChangeRow[] = []
-  for (const group of grouped.value) {
-    rows.push({
-      kind: 'header',
-      item: group.item,
-      label: group.label,
-      className: group.className,
-      count: group.entries.length,
-    })
-    for (const entry of group.entries) {
-      rows.push({ kind: 'entry', entry })
-    }
-  }
-  return rows
+  return [...statusStore.entries]
+    .sort((a, b) => compareBySort(a, b, changeSortValue, (entry) => shortName(entry.path)))
+    .map((entry) => ({ kind: 'entry', entry }))
 })
 
 // ====== 虚拟滚动器 ======
@@ -212,8 +403,7 @@ const changesVirtualizer = useVirtualizer(
     return {
       count: flatChanges.value.length,
       getScrollElement: () => el,
-      estimateSize: (index: number) =>
-        flatChanges.value[index]?.kind === 'header' ? 34 : 30,
+      estimateSize: () => 30,
       overscan: 10,
     }
   }),
@@ -239,6 +429,12 @@ async function reload() {
   // 流式刷新：entry 分批到达即渲染；依赖完整 entries 的清理在流结束后由 watch 处理
   await statusStore.reloadStreaming(props.workingCopy.path)
   await reloadFileTree()
+}
+
+// 显式先写值再刷新，避免 v-model 与副作用监听器的执行顺序导致用旧 flag 拉取
+function onToggleUnversioned(v: boolean | 'indeterminate') {
+  statusStore.showUnversioned = v === true
+  reload().catch(toast)
 }
 
 // 流式刷新完成（loading 由 true 变 false）后，基于完整 entries 做勾选清理与选中恢复
@@ -420,7 +616,8 @@ function shortName(p: string) {
 }
 
 function fileStatus(path: string) {
-  return statusByPath.value.get(path)?.item ?? 'normal'
+  const item = statusByPath.value.get(path)?.item ?? fileTreeByPath.value.get(path)?.svnItem ?? 'normal'
+  return !statusStore.showUnversioned && item === 'unversioned' ? 'normal' : item
 }
 
 function fileStatusLabel(path: string) {
@@ -763,12 +960,24 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
           更新
         </Button>
         <span class="tool-sep" />
-        <Switch v-model="statusStore.showUnversioned" @update:model-value="reload" />
+        <Switch :model-value="statusStore.showUnversioned" @update:model-value="onToggleUnversioned" />
         <span class="hint">未跟踪</span>
         <Button size="xs" variant="ghost" class="toolbar-action" @click="reload">
           <RefreshCw class="icon-xs" />
           刷新
         </Button>
+      </div>
+      <div class="file-table-head">
+        <button
+          v-for="column in FILE_COLUMNS"
+          :key="column.key"
+          type="button"
+          :class="['head-cell', column.className, { active: sortState.key === column.key }]"
+          @click="toggleSort(column.key)"
+        >
+          <span>{{ column.label }}</span>
+          <component :is="sortIcon(column.key)" class="sort-icon" />
+        </button>
       </div>
       <div v-if="leftMode === 'tree'" ref="treeScrollRef" class="tree-scroll virtual-scroll">
         <LoadingSpinner v-if="fileTreeLoading" />
@@ -789,38 +998,47 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
           >
             <div
               :class="['tree-row', 'tree-row-virt', { active: selectedTreePath === flatFileTree[vRow.index].entry.path }]"
-              :style="{ paddingLeft: `${10 + flatFileTree[vRow.index].depth * 16}px` }"
               @click="selectTreeEntry(flatFileTree[vRow.index].entry)"
               @contextmenu.prevent="flatFileTree[vRow.index].entry.kind === 'file'
                 && openRowContextMenu($event, flatFileTree[vRow.index].entry.path, fileStatus(flatFileTree[vRow.index].entry.path))"
             >
-              <ChevronRight
-                v-if="flatFileTree[vRow.index].entry.kind === 'dir'"
-                :class="['tree-caret', { expanded: expandedDirs.has(flatFileTree[vRow.index].entry.path) }]"
-              />
-              <span v-else class="tree-caret placeholder" />
-              <component
-                :is="flatFileTree[vRow.index].entry.kind === 'dir'
-                  ? (expandedDirs.has(flatFileTree[vRow.index].entry.path) ? FolderOpen : Folder)
-                  : FileText"
-                :class="['tree-icon', flatFileTree[vRow.index].entry.kind === 'dir' ? 'tree-icon-dir' : 'tree-icon-file']"
-              />
-              <Checkbox
-                :disabled="!statusByPath.has(flatFileTree[vRow.index].entry.path) || ['normal', 'ignored', 'external'].includes(fileStatus(flatFileTree[vRow.index].entry.path))"
-                :model-value="checkedPaths.has(flatFileTree[vRow.index].entry.path)"
-                @update:model-value="(v) => toggleTreeCheck(flatFileTree[vRow.index].entry, v === true)"
-                @click.stop
-              />
-              <span class="file-path mono" :title="flatFileTree[vRow.index].entry.path">
-                {{ flatFileTree[vRow.index].entry.name }}
+              <div class="name-cell" :style="{ paddingLeft: `${8 + flatFileTree[vRow.index].depth * 16}px` }">
+                <ChevronRight
+                  v-if="flatFileTree[vRow.index].entry.kind === 'dir'"
+                  :class="['tree-caret', { expanded: expandedDirs.has(flatFileTree[vRow.index].entry.path) }]"
+                />
+                <span v-else class="tree-caret placeholder" />
+                <component
+                  :is="flatFileTree[vRow.index].entry.kind === 'dir'
+                    ? (expandedDirs.has(flatFileTree[vRow.index].entry.path) ? FolderOpen : Folder)
+                    : FileText"
+                  :class="['tree-icon', flatFileTree[vRow.index].entry.kind === 'dir' ? 'tree-icon-dir' : 'tree-icon-file']"
+                />
+                <Checkbox
+                  :disabled="!statusByPath.has(flatFileTree[vRow.index].entry.path) || ['normal', 'ignored', 'external'].includes(fileStatus(flatFileTree[vRow.index].entry.path))"
+                  :model-value="checkedPaths.has(flatFileTree[vRow.index].entry.path)"
+                  @update:model-value="(v) => toggleTreeCheck(flatFileTree[vRow.index].entry, v === true)"
+                  @click.stop
+                />
+                <span class="file-path mono" :title="flatFileTree[vRow.index].entry.path">
+                  {{ flatFileTree[vRow.index].entry.name }}
+                </span>
+              </div>
+              <span class="file-meta col-date">{{ formatFileDate(fileDate(flatFileTree[vRow.index].entry)) }}</span>
+              <span class="file-meta col-size mono">{{ formatFileSize(flatFileTree[vRow.index].entry.size, flatFileTree[vRow.index].entry.kind) }}</span>
+              <span class="file-meta col-kind">{{ fileKindLabel(flatFileTree[vRow.index].entry) }}</span>
+              <span class="file-meta col-rev mono">{{ fileRevision(flatFileTree[vRow.index].entry) ?? '--' }}</span>
+              <span class="file-meta col-status">
+                <Badge
+                  v-if="fileStatusLabel(flatFileTree[vRow.index].entry.path)"
+                  variant="outline"
+                  :class="fileStatusClass(flatFileTree[vRow.index].entry.path)"
+                >
+                  {{ fileStatusLabel(flatFileTree[vRow.index].entry.path) }}
+                </Badge>
+                <span v-else class="empty-meta">--</span>
               </span>
-              <Badge
-                v-if="fileStatusLabel(flatFileTree[vRow.index].entry.path)"
-                variant="outline"
-                :class="fileStatusClass(flatFileTree[vRow.index].entry.path)"
-              >
-                {{ fileStatusLabel(flatFileTree[vRow.index].entry.path) }}
-              </Badge>
+              <span class="file-meta col-author">{{ fileAuthor(flatFileTree[vRow.index].entry) || '--' }}</span>
             </div>
           </div>
         </div>
@@ -838,19 +1056,6 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
         >
           <template v-for="vRow in changesVirtualizer.getVirtualItems()" :key="vRow.index">
             <div
-              v-if="flatChanges[vRow.index].kind === 'header'"
-              class="virtual-slot"
-              :style="{ transform: `translateY(${vRow.start}px)`, height: `${vRow.size}px` }"
-            >
-              <div class="group-header">
-                <Badge variant="outline" :class="(flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'header' }>).className">
-                  {{ (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'header' }>).label }}
-                </Badge>
-                <span class="group-count mono">{{ (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'header' }>).count }}</span>
-              </div>
-            </div>
-            <div
-              v-else
               class="virtual-slot"
               :style="{ transform: `translateY(${vRow.start}px)`, height: `${vRow.size}px` }"
             >
@@ -863,17 +1068,39 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
                   (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item,
                 )"
               >
-                <Checkbox
-                  :disabled="['normal', 'ignored', 'external'].includes((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item)"
-                  :model-value="checkedPaths.has((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path)"
-                  @update:model-value="(v) => toggleEntry((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry, v === true)"
-                  @click.stop
-                />
-                <span
-                  class="file-path mono"
-                  :title="(flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path"
-                >
-                  {{ shortName((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path) }}
+                <div class="name-cell change-name">
+                  <Checkbox
+                    :disabled="['normal', 'ignored', 'external'].includes((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item)"
+                    :model-value="checkedPaths.has((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path)"
+                    @update:model-value="(v) => toggleEntry((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry, v === true)"
+                    @click.stop
+                  />
+                  <span class="file-path mono" :title="(flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path">
+                    {{ shortName((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path) }}
+                  </span>
+                </div>
+                <span class="file-meta col-date">
+                  {{ formatFileDate(changeModifiedAt((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry)) }}
+                </span>
+                <span class="file-meta col-size mono">
+                  {{ formatFileSize(changeSize((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry), changeFileEntry((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry)?.kind) }}
+                </span>
+                <span class="file-meta col-kind">
+                  {{ changeKindLabel((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry) }}
+                </span>
+                <span class="file-meta col-rev mono">
+                  {{ changeRevision((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry) ?? '--' }}
+                </span>
+                <span class="file-meta col-status">
+                  <Badge
+                    variant="outline"
+                    :class="STATUS_CLASSES[(flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item] ?? 'status-muted'"
+                  >
+                    {{ STATUS_LABEL[(flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item] ?? (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item }}
+                  </Badge>
+                </span>
+                <span class="file-meta col-author">
+                  {{ changeAuthor((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry) || '--' }}
                 </span>
               </div>
             </div>
@@ -966,6 +1193,16 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
   flex-direction: column;
   min-height: 0;
   height: 100%;
+}
+.file-list {
+  --file-table-columns:
+    minmax(220px, 1.65fr)
+    minmax(128px, 0.82fr)
+    minmax(72px, 0.42fr)
+    minmax(86px, 0.48fr)
+    minmax(82px, 0.42fr)
+    minmax(82px, 0.44fr)
+    minmax(96px, 0.52fr);
 }
 .right-pane {
   border-left: var(--hairline) solid var(--stroke-soft);
@@ -1060,6 +1297,54 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
   user-select: none;
 }
 
+/* ============ 文件表头 ============ */
+.file-table-head {
+  display: grid;
+  grid-template-columns: var(--file-table-columns);
+  gap: 8px;
+  align-items: center;
+  height: 30px;
+  flex: none;
+  padding: 0 14px;
+  border-bottom: var(--hairline) solid var(--stroke-soft);
+  background: color-mix(in srgb, var(--mat-toolbar) 82%, transparent);
+  user-select: none;
+}
+.head-cell {
+  min-width: 0;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.head-cell:hover,
+.head-cell.active {
+  color: var(--fg-strong);
+}
+.head-cell span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sort-icon {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  opacity: 0.62;
+}
+.head-cell.active .sort-icon {
+  opacity: 1;
+}
+
 /* ============ mode-switch 胶囊 segmented control ============ */
 .mode-switch {
   display: flex;
@@ -1088,7 +1373,7 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
   color: var(--fg);
   background: transparent;
 }
-.mode-switch :deep(button.bg-secondary),
+.mode-switch :deep(button.ctl-secondary),
 .mode-switch :deep(button[data-active='true']) {
   color: var(--fg-strong);
   background: var(--mat-elevated);
@@ -1096,7 +1381,7 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
     inset 0 0 0 0.5px var(--stroke),
     0 1px 1.5px rgba(0, 0, 0, 0.06);
 }
-.dark .mode-switch :deep(button.bg-secondary) {
+.dark .mode-switch :deep(button.ctl-secondary) {
   box-shadow:
     inset 0 0 0 0.5px rgba(255, 255, 255, 0.08),
     0 1px 1.5px rgba(0, 0, 0, 0.4);
@@ -1166,8 +1451,10 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
 }
 
 /* ============ 文件行（变更视图 & 树视图）============ */
-.file-row {
-  display: flex;
+.file-row,
+.tree-row {
+  display: grid;
+  grid-template-columns: var(--file-table-columns);
   gap: 8px;
   align-items: center;
   min-height: 28px;
@@ -1177,40 +1464,56 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
   border: 0;
   cursor: pointer;
   background: transparent;
-  transition: background-color 120ms ease-out;
-}
-.file-row:hover {
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
-}
-.file-row.active {
-  background: var(--accent);
-}
-
-.tree-row {
-  display: grid;
-  grid-template-columns: 12px 16px 22px minmax(0, 1fr) auto;
-  gap: 7px;
-  align-items: center;
-  min-height: 26px;
-  margin: 1px 6px;
-  padding: 2px 8px;
-  border-radius: var(--radius-row);
-  border: 0;
-  cursor: pointer;
-  background: transparent;
   font-size: var(--fs-callout);
   transition: background-color 120ms ease-out;
 }
+.file-row:hover,
 .tree-row:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
+.file-row.active,
 .tree-row.active {
   background: var(--accent);
+}
+.name-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.change-name {
+  padding-left: 8px;
+}
+.file-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: var(--fs-callout);
+}
+.col-size,
+.col-rev {
+  justify-content: flex-end;
+  justify-self: end;
+  text-align: right;
+  font-feature-settings: 'tnum';
+}
+.col-status {
+  display: inline-flex;
+  align-items: center;
+}
+.empty-meta {
+  color: var(--fg-subtle);
 }
 
 /* 选中态：文字、icon、checkbox 反白 */
 .file-row.active .file-path,
-.tree-row.active .file-path {
+.tree-row.active .file-path,
+.file-row.active .file-meta,
+.tree-row.active .file-meta,
+.file-row.active .empty-meta,
+.tree-row.active .empty-meta {
   color: #fff;
 }
 .tree-row.active .tree-icon-dir,
@@ -1318,6 +1621,11 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
 }
 
 /* 选中行内的 status pill 切换为白底变体 */
+.file-row.active .status-modified,
+.file-row.active .status-added,
+.file-row.active .status-deleted,
+.file-row.active .status-warning,
+.file-row.active .status-muted,
 .tree-row.active .status-modified,
 .tree-row.active .status-added,
 .tree-row.active .status-deleted,

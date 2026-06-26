@@ -17,9 +17,11 @@ const props = defineProps<{
   currentContent?: string | null
   filename?: string | null
   loading?: boolean
+  // 初始呈现模式；log 视图查看单文件改动时默认 split（左右对比）
+  initialMode?: DiffMode
 }>()
 
-const mode = ref<DiffMode>('unified')
+const mode = ref<DiffMode>(props.initialMode ?? 'unified')
 const containerRef = ref<HTMLDivElement | null>(null)
 const editorInstance = shallowRef<monaco.editor.IStandaloneCodeEditor | null>(null)
 const diffInstance = shallowRef<monaco.editor.IStandaloneDiffEditor | null>(null)
@@ -35,7 +37,13 @@ const isBinary = computed(() => {
   return /Cannot display:.*binary/i.test(props.diffText ?? '')
 })
 
-const isEmpty = computed(() => !props.diffText || props.diffText.trim().length === 0)
+const isEmpty = computed(() => {
+  // split 模式直接喂全文（diffText 可能为空），以两侧内容判断是否有可展示的东西
+  if (mode.value === 'split') {
+    return (props.baseContent ?? '') === '' && (props.currentContent ?? '') === ''
+  }
+  return !props.diffText || props.diffText.trim().length === 0
+})
 
 // 跟踪当前编辑器实际处于哪种模式；用于判断本轮 refresh 是"切模式"还是"换内容"
 let activeMode: DiffMode | null = null
