@@ -155,14 +155,6 @@ const COMMITTABLE = new Set([
   'conflicted',
 ])
 
-const allCommittable = computed(() =>
-  statusStore.entries.filter((e) => COMMITTABLE.has(e.item)),
-)
-const allChecked = computed(
-  () =>
-    allCommittable.value.length > 0 &&
-    allCommittable.value.every((e) => checkedPaths.value.has(e.path)),
-)
 const checkedCommittablePaths = computed(() =>
   [...checkedPaths.value].filter((path) => {
     const entry = statusStore.entries.find((e) => e.path === path)
@@ -375,9 +367,22 @@ type ChangeRow = { kind: 'entry'; entry: SvnStatusEntry }
 
 const flatChanges = computed<ChangeRow[]>(() => {
   return [...statusStore.entries]
+    .filter((entry) => statusStore.showUnversioned || (entry.item !== 'unversioned' && entry.item !== 'ignored'))
     .sort((a, b) => compareBySort(a, b, changeSortValue, (entry) => shortName(entry.path)))
     .map((entry) => ({ kind: 'entry', entry }))
 })
+
+const visibleCommittable = computed(() =>
+  flatChanges.value.map((row) => row.entry).filter((e) => COMMITTABLE.has(e.item)),
+)
+const allChecked = computed(
+  () =>
+    visibleCommittable.value.length > 0 &&
+    visibleCommittable.value.every((e) => checkedPaths.value.has(e.path)),
+)
+const visibleCheckedCount = computed(
+  () => flatChanges.value.filter((row) => checkedPaths.value.has(row.entry.path)).length,
+)
 
 // ====== 虚拟滚动器 ======
 // useVirtualizer 返回 Ref<Virtualizer>；options 用 computed 包裹以响应式追踪 count
@@ -411,9 +416,13 @@ const changesVirtualizer = useVirtualizer(
 
 function toggleAll(v: boolean) {
   if (v) {
-    for (const e of allCommittable.value) checkedPaths.value.add(e.path)
+    for (const e of flatChanges.value) {
+      if (COMMITTABLE.has(e.entry.item)) checkedPaths.value.add(e.entry.path)
+    }
   } else {
-    for (const e of allCommittable.value) checkedPaths.value.delete(e.path)
+    for (const e of flatChanges.value) {
+      if (COMMITTABLE.has(e.entry.item)) checkedPaths.value.delete(e.entry.path)
+    }
   }
 }
 
@@ -434,6 +443,14 @@ async function reload() {
 // 显式先写值再刷新，避免 v-model 与副作用监听器的执行顺序导致用旧 flag 拉取
 function onToggleUnversioned(v: boolean | 'indeterminate') {
   statusStore.showUnversioned = v === true
+  if (!statusStore.showUnversioned) {
+    // 隐藏未跟踪时同步清掉相关勾选，避免工具栏保留不可见文件的批量操作状态。
+    for (const entry of statusStore.entries) {
+      if (entry.item === 'unversioned' || entry.item === 'ignored') {
+        checkedPaths.value.delete(entry.path)
+      }
+    }
+  }
   reload().catch(toast)
 }
 
@@ -590,6 +607,7 @@ function openFileDiff(entry: SvnStatusEntry) {
 }
 
 function openCommit() {
+  leftMode.value = 'changes'
   rightPane.value = 'commit'
 }
 
@@ -617,7 +635,7 @@ function shortName(p: string) {
 
 function fileStatus(path: string) {
   const item = statusByPath.value.get(path)?.item ?? fileTreeByPath.value.get(path)?.svnItem ?? 'normal'
-  return !statusStore.showUnversioned && item === 'unversioned' ? 'normal' : item
+  return !statusStore.showUnversioned && (item === 'unversioned' || item === 'ignored') ? 'normal' : item
 }
 
 function fileStatusLabel(path: string) {
@@ -902,17 +920,6 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
           <FolderPlus class="icon-xs" />
           新建文件夹
         </Button>
-        <label
-          v-if="leftMode === 'changes'"
-          class="inline-check"
-        >
-          <Checkbox
-            :model-value="allChecked ? true : ([...checkedPaths].length > 0 ? 'indeterminate' : false)"
-            @update:model-value="(v) => toggleAll(v === true)"
-          />
-          全选
-        </label>
-
         <span class="spacer" />
 
         <!-- 勾选文件后才出现的批量操作 -->
@@ -968,16 +975,30 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
         </Button>
       </div>
       <div class="file-table-head">
-        <button
+        <div
           v-for="column in FILE_COLUMNS"
           :key="column.key"
-          type="button"
-          :class="['head-cell', column.className, { active: sortState.key === column.key }]"
-          @click="toggleSort(column.key)"
+          :class="['head-cell', column.className, { active: sortState.key === column.key, 'head-name': column.key === 'name' }]"
         >
-          <span>{{ column.label }}</span>
-          <component :is="sortIcon(column.key)" class="sort-icon" />
-        </button>
+          <Checkbox
+            v-if="column.key === 'name' && leftMode === 'changes'"
+            :model-value="allChecked ? true : (visibleCheckedCount > 0 ? 'indeterminate' : false)"
+            title="全选"
+            @update:model-value="(v) => toggleAll(v === true)"
+          />
+          <span
+            v-else-if="column.key === 'name'"
+            class="head-check-placeholder"
+          />
+          <button
+            type="button"
+            class="head-sort"
+            @click="toggleSort(column.key)"
+          >
+            <span>{{ column.label }}</span>
+            <component :is="sortIcon(column.key)" class="sort-icon" />
+          </button>
+        </div>
       </div>
       <div v-if="leftMode === 'tree'" ref="treeScrollRef" class="tree-scroll virtual-scroll">
         <LoadingSpinner v-if="fileTreeLoading" />
@@ -1313,23 +1334,43 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
 .head-cell {
   min-width: 0;
   height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  color: var(--fg-muted);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  text-align: left;
+}
+.head-cell:hover,
+.head-cell.active {
+  color: var(--fg-strong);
+}
+.head-name {
+  gap: 7px;
+  padding-left: 8px;
+}
+.head-check-placeholder {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.head-sort {
+  min-width: 0;
+  height: 100%;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--fs-caption);
-  font-weight: 600;
+  color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.head-cell:hover,
-.head-cell.active {
-  color: var(--fg-strong);
-}
-.head-cell span {
+.head-sort span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

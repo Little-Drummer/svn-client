@@ -39,6 +39,7 @@ const dialog = useConfirmDialog()
 
 <style scoped>
 .confirm-dialog {
+  width: min(520px, calc(100vw - 32px));
   max-width: min(520px, calc(100vw - 32px));
   border-radius: 12px;
   background: color-mix(in srgb, var(--panel-bg) 92%, transparent);
@@ -47,9 +48,12 @@ const dialog = useConfirmDialog()
 }
 .confirm-copy {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: var(--text);
 }
 .confirm-actions {
   gap: 8px;
+  justify-content: flex-end;
 }
 </style>
