@@ -33,3 +33,10 @@ pub fn svn_cat_base(svn_bin: &str, target: &str) -> AppResult<String> {
     let out = run_svn(svn_bin, &["cat", "--non-interactive", "-r", "BASE", target])?;
     Ok(out.stdout)
 }
+
+/// 读取目标在指定 revision 的完整内容（log 视图做左右对比时取 N-1 / N 两份全文）
+pub fn svn_cat_revision(svn_bin: &str, target: &str, revision: u64) -> AppResult<String> {
+    let rev = revision.to_string();
+    let out = run_svn(svn_bin, &["cat", "--non-interactive", "-r", &rev, target])?;
+    Ok(out.stdout)
+}

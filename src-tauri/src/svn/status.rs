@@ -82,8 +82,12 @@ pub fn svn_status(
 
 /// 把解析出的 entry 转为对外结构。默认跳过 normal 且无属性变更的项，避免大量噪声。
 fn entry_to_status(entry: Entry) -> Option<SvnStatusEntry> {
+    entry_to_status_with_options(entry, false)
+}
+
+fn entry_to_status_with_options(entry: Entry, include_normal: bool) -> Option<SvnStatusEntry> {
     let wc = entry.wc_status?;
-    if wc.item == "normal" && wc.props.as_deref().unwrap_or("none") == "none" {
+    if !include_normal && wc.item == "normal" && wc.props.as_deref().unwrap_or("none") == "none" {
         return None;
     }
     let (commit_revision, commit_author, commit_date) = match wc.commit {
@@ -100,6 +104,23 @@ fn entry_to_status(entry: Entry) -> Option<SvnStatusEntry> {
         commit_author,
         commit_date,
     })
+}
+
+/// 获取包含 normal 项的 verbose 状态，用于文件列表补充 revision / author 列。
+pub fn svn_status_verbose_all(svn_bin: &str, target: &str) -> AppResult<Vec<SvnStatusEntry>> {
+    let args = vec!["status", "--xml", "--verbose", "--non-interactive", target];
+    let out = run_svn(svn_bin, &args)?;
+    let parsed: StatusRoot = quick_xml::de::from_str(&out.stdout)?;
+
+    let mut result = Vec::new();
+    for target in parsed.targets {
+        for entry in target.entries {
+            if let Some(status) = entry_to_status_with_options(entry, true) {
+                result.push(status);
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// 流式获取工作副本状态：spawn svn 子进程，用 quick-xml 增量解析 stdout，

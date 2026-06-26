@@ -1,22 +1,28 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    RemoteListEntry, RepositoryEntry, SvnInfo, SvnLogEntry, SvnStatusEntry, WorkingCopyEntry,
-    WorkingCopyFileEntry,
+    CapturePresetFile, ConfigPreset, PresetApplyPlan, Project, RemoteListEntry, RepositoryEntry,
+    SvnInfo, SvnLogEntry, SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry,
 };
-use crate::process::{spawn_status_stream, spawn_svn_task};
+use crate::process::{spawn_merge_task, spawn_status_stream, spawn_svn_task, ProcessRegistry};
 use crate::storage::ConfigState;
-use crate::svn::diff::{svn_cat_base, svn_diff_file, svn_diff_revision};
+use crate::svn::diff::{svn_cat_base, svn_cat_revision, svn_diff_file, svn_diff_revision};
 use crate::svn::info::svn_info;
 use crate::svn::list::{
     svn_cat_remote as run_svn_cat_remote, svn_list_remote as run_svn_list_remote,
 };
 use crate::svn::log::{svn_log, LogOptions};
+use crate::svn::merge::{build_preview, build_routes, fetch_revisions, MergePreview, MergeRevision, MergeRoute};
+use crate::svn::package::{
+    commit_version, fetch_package_revisions, package_zip, run_package_build, PackageBuildResult,
+    PackageOptions, PackageRevision, PackageZipResult,
+};
+use crate::svn::project::{group_working_copies, scan_project_dir};
 use crate::svn::runner::{check_svn_version, run_svn};
-use crate::svn::status::svn_status;
+use crate::svn::status::{svn_status, svn_status_verbose_all};
 
 // ---------- 环境检查 ----------
 
@@ -181,7 +187,12 @@ pub fn list_working_copies(state: State<ConfigState>) -> AppResult<Vec<WorkingCo
         .config
         .lock()
         .map_err(|_| AppError::Other("config 锁被污染".into()))?;
-    Ok(cfg.working_copies.clone())
+    let mut entries = cfg.working_copies.clone();
+    // 实时标记路径可用性：外置卷未挂载或目录被删时前端据此降级展示，而不是逐个命令报错
+    for wc in &mut entries {
+        wc.available = std::path::Path::new(&wc.path).is_dir();
+    }
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -209,6 +220,7 @@ pub fn add_working_copy(state: State<ConfigState>, path: String) -> AppResult<Wo
         last_seen_at: Some(Utc::now().to_rfc3339()),
         relative_url: info.relative_url.clone(),
         display_name: None,
+        available: true,
     };
 
     {
@@ -308,7 +320,11 @@ pub fn set_working_copy_display_name(
         .find(|wc| wc.id == id)
         .ok_or_else(|| AppError::Other(format!("找不到工作副本 {}", id)))?;
 
-    entry.display_name = if display_name.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+    entry.display_name = if display_name
+        .as_ref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
         None
     } else {
         display_name
@@ -320,18 +336,333 @@ pub fn set_working_copy_display_name(
     Ok(result)
 }
 
+/// 项目分组视图：把当前工作副本聚合成 项目 → 环境(分支) → 模块 结构。
 #[tauri::command]
-pub async fn list_working_copy_files(root: String) -> AppResult<Vec<WorkingCopyFileEntry>> {
+pub fn list_projects(state: State<ConfigState>) -> AppResult<Vec<Project>> {
+    let cfg = state
+        .config
+        .lock()
+        .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+    Ok(group_working_copies(&cfg.working_copies))
+}
+
+/// 扫描一个项目根目录，自动识别其下所有分支/模块工作副本并批量加入列表。
+/// 已存在的路径只更新元信息，返回本次新增或更新的工作副本。
+#[tauri::command]
+pub fn scan_and_add_project(
+    state: State<ConfigState>,
+    path: String,
+) -> AppResult<Vec<WorkingCopyEntry>> {
+    if path.trim().is_empty() {
+        return Err(AppError::InvalidPath(path));
+    }
+    let bin = state.svn_bin();
+    let root = std::path::PathBuf::from(path.trim());
+    let candidates = scan_project_dir(&root)?;
+
+    // 先在锁外把每个候选目录的 svn info 取齐，避免持锁期间执行子进程
+    let mut infos = Vec::new();
+    for wc_path in candidates {
+        let p = wc_path.to_string_lossy().to_string();
+        // 个别子目录不是有效工作副本时跳过，不影响其余识别结果
+        if let Ok(info) = svn_info(&bin, &p) {
+            infos.push(info);
+        }
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut touched = Vec::new();
+    {
+        let mut cfg = state
+            .config
+            .lock()
+            .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+        for info in infos {
+            if let Some(existing) = cfg.working_copies.iter_mut().find(|wc| wc.path == info.path) {
+                existing.url = Some(info.url);
+                existing.repository_root = Some(info.repository_root);
+                existing.revision = Some(info.revision);
+                existing.last_seen_at = Some(now.clone());
+                existing.relative_url = info.relative_url;
+                // 保留用户设置的 display_name
+                touched.push(existing.clone());
+            } else {
+                let entry = WorkingCopyEntry {
+                    id: Uuid::new_v4().to_string(),
+                    path: info.path,
+                    url: Some(info.url),
+                    repository_root: Some(info.repository_root),
+                    revision: Some(info.revision),
+                    last_seen_at: Some(now.clone()),
+                    relative_url: info.relative_url,
+                    display_name: None,
+        available: true,
+                };
+                cfg.working_copies.push(entry.clone());
+                touched.push(entry);
+            }
+        }
+    }
+    state.save()?;
+    Ok(touched)
+}
+
+// ---------- 多级合并 ----------
+
+/// 列出某个项目所有可用的合并方向。
+#[tauri::command]
+pub fn merge_list_routes(
+    state: State<ConfigState>,
+    project_name: String,
+) -> AppResult<Vec<MergeRoute>> {
+    let cfg = state
+        .config
+        .lock()
+        .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+    let projects = group_working_copies(&cfg.working_copies);
+    let project = projects
+        .iter()
+        .find(|p| p.name == project_name)
+        .ok_or_else(|| AppError::Other(format!("找不到项目 {project_name}")))?;
+    Ok(build_routes(project))
+}
+
+/// 拉取某条合并方向下目标分支尚未包含的、可合入的版本（已过滤双向同步提交）。
+#[tauri::command]
+pub async fn merge_fetch_revisions(
+    state: State<'_, ConfigState>,
+    route: MergeRoute,
+) -> AppResult<Vec<MergeRevision>> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || fetch_revisions(&bin, &route))
+        .await
+        .map_err(|e| AppError::Other(format!("拉取合并版本任务失败: {e}")))?
+}
+
+/// 根据选中版本生成等价命令行 + 公司格式合并日志预览。
+#[tauri::command]
+pub async fn merge_preview(
+    state: State<'_, ConfigState>,
+    route: MergeRoute,
+    entries: Vec<MergeRevision>,
+    revisions: Vec<u64>,
+) -> AppResult<MergePreview> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || build_preview(&bin, &route, &entries, &revisions))
+        .await
+        .map_err(|e| AppError::Other(format!("生成合并预览任务失败: {e}")))
+}
+
+/// 执行合并：（可选搁置）→ update → merge → 有变更才 commit →（恢复搁置），流式推送进度。
+#[tauri::command]
+pub fn merge_execute(
+    app: AppHandle,
+    state: State<ConfigState>,
+    route: MergeRoute,
+    revisions: Vec<u64>,
+    message: String,
+) -> AppResult<String> {
+    if revisions.is_empty() {
+        return Err(AppError::Other("没有选择任何版本".into()));
+    }
+    let bin = state.svn_bin();
+    let shelves_dir = state
+        .config_path
+        .parent()
+        .map(|p| p.join("shelves"))
+        .ok_or_else(|| AppError::Other("无法定位配置目录".into()))?;
+    spawn_merge_task(app, bin, route, revisions, message, shelves_dir)
+}
+
+// ---------- 本地开发配置预设 ----------
+
+/// 列出全部配置预设。预设是全局统一的，不再按项目过滤。
+#[tauri::command]
+pub fn list_config_presets(state: State<ConfigState>) -> AppResult<Vec<ConfigPreset>> {
+    let cfg = state
+        .config
+        .lock()
+        .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+    Ok(cfg.config_presets.clone())
+}
+
+/// 把选中文件的当前内容捕获为一个配置预设。
+/// 每个文件可指定行范围（只捕获并替换那几行），不指定则整文件。
+#[tauri::command]
+pub fn capture_config_preset(
+    state: State<ConfigState>,
+    name: String,
+    wc_root: String,
+    files: Vec<CapturePresetFile>,
+) -> AppResult<ConfigPreset> {
+    if name.trim().is_empty() {
+        return Err(AppError::Other("预设名称不能为空".into()));
+    }
+    if files.is_empty() {
+        return Err(AppError::Other("至少选择一个文件".into()));
+    }
+    let root = std::path::PathBuf::from(wc_root.trim());
+    let mut preset_files = Vec::new();
+    for spec in &files {
+        preset_files.push(crate::svn::preset::capture_file(&root, spec)?);
+    }
+    let preset = ConfigPreset {
+        id: Uuid::new_v4().to_string(),
+        project_name: None,
+        name: name.trim().to_string(),
+        files: preset_files,
+    };
+    {
+        let mut cfg = state
+            .config
+            .lock()
+            .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+        cfg.config_presets.push(preset.clone());
+    }
+    state.save()?;
+    Ok(preset)
+}
+
+fn find_preset(state: &State<ConfigState>, id: &str) -> AppResult<ConfigPreset> {
+    let cfg = state
+        .config
+        .lock()
+        .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+    cfg.config_presets
+        .iter()
+        .find(|p| p.id == id)
+        .cloned()
+        .ok_or_else(|| AppError::Other(format!("找不到预设 {id}")))
+}
+
+/// 预览应用预设：返回每个文件将发生的变更（含被替换的行），不写盘。
+#[tauri::command]
+pub fn preview_config_preset(
+    state: State<ConfigState>,
+    id: String,
+    wc_root: String,
+) -> AppResult<Vec<PresetApplyPlan>> {
+    let preset = find_preset(&state, &id)?;
+    let root = std::path::PathBuf::from(wc_root.trim());
+    crate::svn::preset::apply_preset(&root, &preset.files, true)
+}
+
+/// 应用预设到目标工作副本：整文件覆盖或按片段行替换，返回每个文件的结果。
+#[tauri::command]
+pub fn apply_config_preset(
+    state: State<ConfigState>,
+    id: String,
+    wc_root: String,
+) -> AppResult<Vec<PresetApplyPlan>> {
+    let preset = find_preset(&state, &id)?;
+    let root = std::path::PathBuf::from(wc_root.trim());
+    crate::svn::preset::apply_preset(&root, &preset.files, false)
+}
+
+/// 删除一个配置预设。
+#[tauri::command]
+pub fn delete_config_preset(state: State<ConfigState>, id: String) -> AppResult<()> {
+    {
+        let mut cfg = state
+            .config
+            .lock()
+            .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+        cfg.config_presets.retain(|p| p.id != id);
+    }
+    state.save()
+}
+
+// ---------- 增量打包 ----------
+
+/// 拉取 rest 模块最近若干条提交，供选择打包版本。
+#[tauri::command]
+pub async fn package_fetch_revisions(
+    state: State<'_, ConfigState>,
+    rest_path: String,
+    limit: Option<u32>,
+) -> AppResult<Vec<PackageRevision>> {
+    let bin = state.svn_bin();
+    let lim = limit.unwrap_or(20);
+    tauri::async_runtime::spawn_blocking(move || fetch_package_revisions(&bin, &rest_path, lim))
+        .await
+        .map_err(|e| AppError::Other(format!("拉取打包版本任务失败: {e}")))?
+}
+
+/// 执行增量包构建（不含 zip）。
+#[tauri::command]
+pub async fn package_build(
+    state: State<'_, ConfigState>,
+    rest_path: String,
+    options: PackageOptions,
+    revisions: Vec<u64>,
+) -> AppResult<PackageBuildResult> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_package_build(&bin, &rest_path, &options, &revisions)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("构建增量包任务失败: {e}")))?
+    .map_err(AppError::Other)
+}
+
+/// 把提供包目录打成 ZIP（构建完成、放入前端包后调用）。
+#[tauri::command]
+pub async fn package_make_zip(
+    base_dir: String,
+    requirement_name: String,
+) -> AppResult<PackageZipResult> {
+    tauri::async_runtime::spawn_blocking(move || package_zip(&base_dir, &requirement_name))
+        .await
+        .map_err(|e| AppError::Other(format!("打包 ZIP 任务失败: {e}")))?
+        .map_err(AppError::Other)
+}
+
+/// 写入分支 rest/version 并提交。
+#[tauri::command]
+pub async fn package_commit_version(
+    state: State<'_, ConfigState>,
+    rest_path: String,
+    version: String,
+) -> AppResult<String> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || commit_version(&bin, &rest_path, &version))
+        .await
+        .map_err(|e| AppError::Other(format!("提交 version 任务失败: {e}")))?
+}
+
+#[tauri::command]
+pub async fn list_working_copy_files(
+    state: State<'_, ConfigState>,
+    root: String,
+) -> AppResult<Vec<WorkingCopyFileEntry>> {
+    let bin = state.svn_bin();
     // 全量递归遍历目录树是阻塞 IO，必须移出主线程，否则切换工作副本时会冻结 UI
-    tauri::async_runtime::spawn_blocking(move || list_working_copy_files_blocking(root))
+    tauri::async_runtime::spawn_blocking(move || list_working_copy_files_blocking(root, bin))
         .await
         .map_err(|e| AppError::Other(format!("文件树遍历任务失败: {e}")))?
 }
 
-fn list_working_copy_files_blocking(root: String) -> AppResult<Vec<WorkingCopyFileEntry>> {
+fn list_working_copy_files_blocking(
+    root: String,
+    svn_bin: String,
+) -> AppResult<Vec<WorkingCopyFileEntry>> {
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
-    fn build_entry(path: PathBuf, root: &Path) -> AppResult<Option<WorkingCopyFileEntry>> {
+    fn normalize_status_path(root: &Path, raw_path: &str) -> String {
+        let p = PathBuf::from(raw_path);
+        if p.is_absolute() {
+            p.to_string_lossy().to_string()
+        } else {
+            root.join(p).to_string_lossy().to_string()
+        }
+    }
+
+    fn build_entry(
+        path: PathBuf,
+        root: &Path,
+        svn_meta: &HashMap<String, SvnStatusEntry>,
+    ) -> AppResult<Option<WorkingCopyFileEntry>> {
         let name = path
             .file_name()
             .and_then(|s| s.to_str())
@@ -342,6 +673,15 @@ fn list_working_copy_files_blocking(root: String) -> AppResult<Vec<WorkingCopyFi
         }
         let meta = std::fs::metadata(&path).map_err(AppError::Io)?;
         let kind = if meta.is_dir() { "dir" } else { "file" }.to_string();
+        let modified_at = meta.modified().ok().map(|time| {
+            let dt: DateTime<Utc> = time.into();
+            dt.to_rfc3339()
+        });
+        let size = if meta.is_file() {
+            Some(meta.len())
+        } else {
+            None
+        };
         let rel = path
             .strip_prefix(root)
             .unwrap_or(&path)
@@ -373,16 +713,26 @@ fn list_working_copy_files_blocking(root: String) -> AppResult<Vec<WorkingCopyFi
                 }
             });
             for child in child_paths {
-                if let Some(entry) = build_entry(child, root)? {
+                if let Some(entry) = build_entry(child, root, svn_meta)? {
                     children.push(entry);
                 }
             }
         }
+        let svn = svn_meta.get(&path.to_string_lossy().to_string());
         Ok(Some(WorkingCopyFileEntry {
             name,
             path: path.to_string_lossy().to_string(),
             relative_path: rel,
             kind,
+            size,
+            modified_at,
+            svn_item: svn.map(|s| s.item.clone()),
+            props: svn.and_then(|s| s.props.clone()),
+            copied: svn.map(|s| s.copied).unwrap_or(false),
+            revision: svn.and_then(|s| s.revision),
+            commit_revision: svn.and_then(|s| s.commit_revision),
+            commit_author: svn.and_then(|s| s.commit_author.clone()),
+            commit_date: svn.and_then(|s| s.commit_date.clone()),
             children,
         }))
     }
@@ -391,9 +741,16 @@ fn list_working_copy_files_blocking(root: String) -> AppResult<Vec<WorkingCopyFi
     if root_path.as_os_str().is_empty() || !root_path.is_dir() {
         return Err(AppError::InvalidPath(root));
     }
+    // verbose status 只用于补齐列表列；失败时仍展示本地文件树，避免 SVN 元数据阻塞浏览。
+    let svn_meta: HashMap<String, SvnStatusEntry> = svn_status_verbose_all(&svn_bin, root.trim())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| (normalize_status_path(&root_path, &entry.path), entry))
+        .collect();
     let mut result = Vec::new();
     for entry in std::fs::read_dir(&root_path).map_err(AppError::Io)? {
-        if let Some(file) = build_entry(entry.map_err(AppError::Io)?.path(), &root_path)? {
+        if let Some(file) = build_entry(entry.map_err(AppError::Io)?.path(), &root_path, &svn_meta)?
+        {
             result.push(file);
         }
     }
@@ -508,9 +865,25 @@ pub async fn svn_get_diff_revision(
 }
 
 #[tauri::command]
-pub async fn svn_get_base_content(state: State<'_, ConfigState>, path: String) -> AppResult<String> {
+pub async fn svn_get_base_content(
+    state: State<'_, ConfigState>,
+    path: String,
+) -> AppResult<String> {
     let bin = state.svn_bin();
     tauri::async_runtime::spawn_blocking(move || svn_cat_base(&bin, &path))
+        .await
+        .map_err(|e| AppError::Other(format!("svn cat 任务失败: {e}")))?
+}
+
+// 取目标（本地路径或远端 URL）在指定 revision 的完整内容，供 log 视图左右对比
+#[tauri::command]
+pub async fn svn_get_cat_revision(
+    state: State<'_, ConfigState>,
+    target: String,
+    revision: u64,
+) -> AppResult<String> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || svn_cat_revision(&bin, &target, revision))
         .await
         .map_err(|e| AppError::Other(format!("svn cat 任务失败: {e}")))?
 }
@@ -545,6 +918,49 @@ pub fn reveal_in_file_manager(path: String) -> AppResult<()> {
             .unwrap_or_else(|| p.to_string());
         let mut c = Command::new("xdg-open");
         c.arg(parent);
+        c
+    };
+    cmd.spawn().map_err(AppError::Io)?;
+    Ok(())
+}
+
+// 在系统终端中打开指定目录（macOS Terminal / Windows cmd / Linux 常见终端）
+#[tauri::command]
+pub fn open_in_terminal(path: String) -> AppResult<()> {
+    use std::process::Command;
+    let p = path.trim();
+    if p.is_empty() {
+        return Err(AppError::InvalidPath(path));
+    }
+    // 工作副本路径若指向文件则退回其所在目录，确保终端落在有效工作目录
+    let dir = {
+        let pb = std::path::Path::new(p);
+        if pb.is_dir() {
+            p.to_string()
+        } else {
+            pb.parent()
+                .map(|d| d.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.to_string())
+        }
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("open");
+        c.args(["-a", "Terminal", &dir]);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        // start 是 cmd 内建命令，需经 cmd /c 调用；空标题参数占位避免路径被当成窗口标题
+        let mut c = Command::new("cmd");
+        c.args(["/c", "start", "cmd", "/k", "cd", "/d", &dir]);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        // Linux 终端无统一入口，优先 x-terminal-emulator，失败时由调用方感知
+        let mut c = Command::new("x-terminal-emulator");
+        c.current_dir(&dir);
         c
     };
     cmd.spawn().map_err(AppError::Io)?;
@@ -655,6 +1071,7 @@ pub fn svn_ignore(state: State<ConfigState>, paths: Vec<String>) -> AppResult<()
 pub fn svn_start_commit(
     app: AppHandle,
     state: State<ConfigState>,
+    registry: State<ProcessRegistry>,
     paths: Vec<String>,
     message: String,
 ) -> AppResult<String> {
@@ -677,13 +1094,14 @@ pub fn svn_start_commit(
     for p in paths {
         args.push(p);
     }
-    spawn_svn_task(app, bin, args, "提交".into())
+    spawn_svn_task(app, bin, args, "提交".into(), registry.inner().clone())
 }
 
 #[tauri::command]
 pub fn svn_start_update(
     app: AppHandle,
     state: State<ConfigState>,
+    registry: State<ProcessRegistry>,
     path: String,
     revision: Option<String>,
 ) -> AppResult<String> {
@@ -696,13 +1114,14 @@ pub fn svn_start_update(
         }
     }
     args.push(path);
-    spawn_svn_task(app, bin, args, "更新".into())
+    spawn_svn_task(app, bin, args, "更新".into(), registry.inner().clone())
 }
 
 #[tauri::command]
 pub fn svn_start_checkout(
     app: AppHandle,
     state: State<ConfigState>,
+    registry: State<ProcessRegistry>,
     url: String,
     target_path: String,
     revision: Option<String>,
@@ -734,5 +1153,24 @@ pub fn svn_start_checkout(
     }
     args.push(url);
     args.push(target_path);
-    spawn_svn_task(app, bin, args, "检出".into())
+    spawn_svn_task(app, bin, args, "检出".into(), registry.inner().clone())
+}
+
+/// 终止一个运行中的长任务（kill 其 svn 子进程）。
+/// 返回任务当时是否还在运行（false 表示已结束或不存在，前端可据此忽略）。
+#[tauri::command]
+pub fn svn_cancel_task(registry: State<ProcessRegistry>, task_id: String) -> bool {
+    registry.cancel(&task_id)
+}
+
+/// 清理工作副本残留的锁。kill 更新进程后工作副本会留在 locked 状态（E155004），
+/// 此命令阻塞到 cleanup 完成，前端随后即可安全重试原任务。
+#[tauri::command]
+pub async fn svn_cleanup(state: State<'_, ConfigState>, path: String) -> AppResult<()> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_svn(&bin, &["cleanup", "--non-interactive", &path]).map(|_| ())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("cleanup 执行线程异常: {e}")))?
 }

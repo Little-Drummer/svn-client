@@ -34,6 +34,8 @@ pub fn run() {
             }
             let state = storage::init_config_state(&app.handle())?;
             app.manage(state);
+            // 长任务进程注册表，供终止任务命令查找并 kill 对应子进程
+            app.manage(process::ProcessRegistry::new());
 
             // 构建原生应用菜单，补齐 macOS 标准的 应用/编辑/视图/窗口 菜单
             let handle = app.handle();
@@ -95,6 +97,21 @@ pub fn run() {
             commands::remove_working_copy,
             commands::refresh_working_copy,
             commands::set_working_copy_display_name,
+            commands::list_projects,
+            commands::scan_and_add_project,
+            commands::merge_list_routes,
+            commands::merge_fetch_revisions,
+            commands::merge_preview,
+            commands::merge_execute,
+            commands::package_fetch_revisions,
+            commands::package_build,
+            commands::package_make_zip,
+            commands::package_commit_version,
+            commands::list_config_presets,
+            commands::capture_config_preset,
+            commands::preview_config_preset,
+            commands::apply_config_preset,
+            commands::delete_config_preset,
             commands::list_working_copy_files,
             commands::create_working_copy_folder,
             commands::svn_get_info,
@@ -104,8 +121,10 @@ pub fn run() {
             commands::svn_get_diff,
             commands::svn_get_diff_revision,
             commands::svn_get_base_content,
+            commands::svn_get_cat_revision,
             commands::read_file_text,
             commands::reveal_in_file_manager,
+            commands::open_in_terminal,
             commands::svn_revert,
             commands::svn_add,
             commands::svn_delete,
@@ -113,6 +132,8 @@ pub fn run() {
             commands::svn_start_commit,
             commands::svn_start_update,
             commands::svn_start_checkout,
+            commands::svn_cancel_task,
+            commands::svn_cleanup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

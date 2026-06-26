@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::errors::{AppError, AppResult};
-use crate::models::{RepositoryEntry, WorkingCopyEntry};
+use crate::models::{ConfigPreset, RepositoryEntry, WorkingCopyEntry};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub repositories: Vec<RepositoryEntry>,
     #[serde(default)]
     pub working_copies: Vec<WorkingCopyEntry>,
+    #[serde(default)]
+    pub config_presets: Vec<ConfigPreset>,
 }
 
 pub struct ConfigState {
