@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ArrowLeft, ChevronRight, DownloadCloud, Folder, FileText, ScrollText, X } from 'lucide-vue-next'
+import { ArrowLeft, ChevronRight, DownloadCloud, Folder, FileText, ScrollText, Search, X } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,6 +27,13 @@ const manualUrl = ref('')
 const previewOpen = ref(false)
 
 const repoRoot = computed(() => props.repository?.url.trim().replace(/\/+$/, '') ?? '')
+
+const searchQuery = ref('')
+const filteredEntries = computed(() => {
+  const kw = searchQuery.value.trim().toLowerCase()
+  if (!kw) return entries.value
+  return entries.value.filter((e) => e.name.toLowerCase().includes(kw))
+})
 
 const crumbs = computed(() => {
   if (!repoRoot.value || !currentUrl.value.startsWith(repoRoot.value)) return []
@@ -63,6 +70,7 @@ async function load(url = currentUrl.value) {
   selected.value = null
   fileContent.value = ''
   previewOpen.value = false
+  searchQuery.value = ''
   try {
     currentUrl.value = url.trim().replace(/\/+$/, '')
     manualUrl.value = currentUrl.value
@@ -232,12 +240,33 @@ watch(
       </div>
 
       <nav class="crumbs">
-        <template v-for="(crumb, idx) in crumbs" :key="crumb.url">
-          <ChevronRight v-if="idx > 0" class="crumb-sep" />
-          <button class="crumb" type="button" @click="load(crumb.url)">
-            {{ crumb.label }}
+        <div class="crumb-path">
+          <template v-for="(crumb, idx) in crumbs" :key="crumb.url">
+            <ChevronRight v-if="idx > 0" class="crumb-sep" />
+            <button class="crumb" type="button" @click="load(crumb.url)">
+              {{ crumb.label }}
+            </button>
+          </template>
+        </div>
+        <div class="crumb-search" :class="{ 'is-active': searchQuery.length > 0 }">
+          <Search class="crumb-search-icon" />
+          <input
+            v-model="searchQuery"
+            class="crumb-search-input"
+            placeholder="搜索当前目录"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button
+            v-if="searchQuery"
+            class="crumb-search-clear"
+            type="button"
+            tabindex="-1"
+            @click="searchQuery = ''"
+          >
+            <X class="icon-clear" />
           </button>
-        </template>
+        </div>
       </nav>
 
       <div :class="['browser-body', { 'preview-open': previewOpen }]">
@@ -252,9 +281,10 @@ watch(
           <div class="remote-scroll">
             <LoadingSpinner v-if="loading" />
             <EmptyState v-else-if="entries.length === 0" description="目录为空" />
+            <EmptyState v-else-if="filteredEntries.length === 0" description="无匹配项" />
             <template v-else>
               <div
-                v-for="entry in entries"
+                v-for="entry in filteredEntries"
                 :key="entry.url"
                 :class="['remote-row', { active: selected?.url === entry.url }]"
                 @click="selectEntry(entry)"
@@ -309,8 +339,7 @@ watch(
   background: var(--mat-content);
 }
 .browser-toolbar,
-.url-row,
-.crumbs {
+.url-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -346,11 +375,23 @@ watch(
   flex: 1;
 }
 .crumbs {
-  overflow-x: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 12px;
   border-bottom: var(--hairline) solid var(--stroke-soft);
-  padding-top: 6px;
-  padding-bottom: 6px;
+  background: var(--mat-toolbar);
+  backdrop-filter: var(--vibrancy-toolbar);
+  -webkit-backdrop-filter: var(--vibrancy-toolbar);
+  min-height: 34px;
+}
+.crumb-path {
+  display: flex;
+  align-items: center;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 .crumb {
   border: 0;
@@ -359,10 +400,11 @@ watch(
   cursor: default;
   font-size: var(--fs-callout);
   font-weight: 500;
-  padding: 3px 8px;
+  padding: 3px 6px;
   border-radius: var(--radius-sm);
   white-space: nowrap;
   transition: background-color 120ms ease-out;
+  flex: none;
 }
 .crumb:hover {
   background: var(--accent-soft);
@@ -372,6 +414,75 @@ watch(
   height: 11px;
   color: var(--fg-subtle);
   flex: none;
+}
+
+/* ===== 搜索框 ===== */
+.crumb-search {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  width: 180px;
+  height: 26px;
+  padding: 0 6px 0 8px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--stroke);
+  transition: width 200ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+.crumb-search:focus-within {
+  width: 240px;
+  background: var(--mat-elevated);
+  box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 3px var(--accent-ring);
+}
+.crumb-search.is-active {
+  background: color-mix(in srgb, var(--accent) 8%, var(--mat-elevated));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.crumb-search-icon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--fg-subtle);
+  transition: color 160ms ease;
+}
+.crumb-search:focus-within .crumb-search-icon {
+  color: var(--accent);
+}
+.crumb-search-input {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-callout);
+  color: var(--fg);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+.crumb-search-input::placeholder {
+  color: var(--fg-subtle);
+}
+.crumb-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--fg) 16%, transparent);
+  color: var(--fg-muted);
+  cursor: default;
+  padding: 0;
+  transition: background 120ms ease, color 120ms ease;
+}
+.crumb-search-clear:hover {
+  background: color-mix(in srgb, var(--fg) 24%, transparent);
+  color: var(--fg);
+}
+.icon-clear {
+  width: 9px;
+  height: 9px;
 }
 .browser-body {
   display: grid;
