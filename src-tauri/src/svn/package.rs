@@ -436,8 +436,14 @@ fn project_version(rest_path: &Path) -> String {
     let content = content.trim();
     let parts: Vec<&str> = content.splitn(3, '.').collect();
     if parts.len() >= 2 {
-        let major: String = parts[0].chars().take_while(|c| c.is_ascii_digit()).collect();
-        let minor: String = parts[1].chars().take_while(|c| c.is_ascii_digit()).collect();
+        let major: String = parts[0]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        let minor: String = parts[1]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         if !major.is_empty() && !minor.is_empty() {
             return format!("{major}.{minor}");
         }
@@ -478,9 +484,15 @@ pub fn run_package_build(
     let project_root = rest
         .parent()
         .map(|env_or_root| {
-            let env_name = env_or_root.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let env_name = env_or_root
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
             if ENV_DIRS.contains(&env_name) {
-                env_or_root.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| env_or_root.to_path_buf())
+                env_or_root
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| env_or_root.to_path_buf())
             } else {
                 env_or_root.to_path_buf()
             }
@@ -519,7 +531,8 @@ pub fn run_package_build(
     if dirs.rest_dir.exists() {
         fs::remove_dir_all(&dirs.rest_dir).map_err(|e| format!("删除全量 rest 失败：{e}"))?;
     }
-    fs::rename(&dirs.copy_dir, &dirs.rest_dir).map_err(|e| format!("重命名 copy->rest 失败：{e}"))?;
+    fs::rename(&dirs.copy_dir, &dirs.rest_dir)
+        .map_err(|e| format!("重命名 copy->rest 失败：{e}"))?;
     log.push(format!("版本：{version}"));
 
     Ok(PackageBuildResult {
@@ -567,7 +580,8 @@ pub fn package_zip(base_dir: &str, requirement_name: &str) -> Result<PackageZipR
         zip.start_file(arcname, options)
             .map_err(|e| format!("写入 ZIP 条目失败：{e}"))?;
         let data = fs::read(&file_path).map_err(|e| format!("读取文件失败：{e}"))?;
-        zip.write_all(&data).map_err(|e| format!("写入 ZIP 数据失败：{e}"))?;
+        zip.write_all(&data)
+            .map_err(|e| format!("写入 ZIP 数据失败：{e}"))?;
     }
     zip.finish().map_err(|e| format!("完成 ZIP 失败：{e}"))?;
 

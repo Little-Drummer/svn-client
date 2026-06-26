@@ -394,8 +394,10 @@ fn format_merge_message(
     revisions: &[u64],
 ) -> String {
     let set: HashSet<u64> = revisions.iter().copied().collect();
-    let mut selected: Vec<&MergeRevision> =
-        entries.iter().filter(|e| set.contains(&e.revision)).collect();
+    let mut selected: Vec<&MergeRevision> = entries
+        .iter()
+        .filter(|e| set.contains(&e.revision))
+        .collect();
     selected.sort_by_key(|e| e.revision);
 
     let revision_text = compact_revisions(revisions);
@@ -500,8 +502,11 @@ fn shelve_target(
         .map_err(|e| format!("写入状态文件失败：{e}"))?;
 
     let diff = run_svn(svn_bin, &["diff", target]).map_err(|e| format!("生成搁置补丁失败：{e}"))?;
-    fs::write(shelf_dir.join("changes.patch"), format!("{}\n", diff.stdout))
-        .map_err(|e| format!("写入补丁失败：{e}"))?;
+    fs::write(
+        shelf_dir.join("changes.patch"),
+        format!("{}\n", diff.stdout),
+    )
+    .map_err(|e| format!("写入补丁失败：{e}"))?;
 
     info(on_line, format!("已生成搁置补丁：{}", shelf_dir.display()));
     if !run_step(svn_bin, &["revert", "-R", target], on_line) {
@@ -559,7 +564,11 @@ pub fn run_merge_flow<F: FnMut(StreamLine)>(
 
     // 2. update，避免 mixed-revision 工作副本导致合并失败
     info(&mut on_line, "开始执行 svn update...");
-    if !run_step(svn_bin, &["update", "--non-interactive", target], &mut on_line) {
+    if !run_step(
+        svn_bin,
+        &["update", "--non-interactive", target],
+        &mut on_line,
+    ) {
         on_line(StreamLine::Stderr("svn update 失败，已中止合并。".into()));
         return false;
     }
@@ -574,7 +583,9 @@ pub fn run_merge_flow<F: FnMut(StreamLine)>(
         &["merge", "--non-interactive", "-c", &arg, &url, target],
         &mut on_line,
     ) {
-        on_line(StreamLine::Stderr("合并失败或存在冲突，请处理后再继续。".into()));
+        on_line(StreamLine::Stderr(
+            "合并失败或存在冲突，请处理后再继续。".into(),
+        ));
         return false;
     }
 

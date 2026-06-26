@@ -152,7 +152,15 @@ fn locate_fragment(target: &[String], frag: &PresetFragment) -> Option<FragmentS
 
 // 按文件名查找时跳过的目录：版本控制元数据与构建产物
 const SKIP_DIRS: &[&str] = &[
-    ".svn", ".git", ".idea", ".vscode", "node_modules", "target", "dist", "build", "out",
+    ".svn",
+    ".git",
+    ".idea",
+    ".vscode",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
 ];
 
 // 预设文件在目标工作副本中的落点解析结果
@@ -164,7 +172,12 @@ enum DestResolution {
     Ambiguous(Vec<String>),
 }
 
-fn collect_by_name(dir: &Path, name: &std::ffi::OsStr, out: &mut Vec<std::path::PathBuf>, depth: usize) {
+fn collect_by_name(
+    dir: &Path,
+    name: &std::ffi::OsStr,
+    out: &mut Vec<std::path::PathBuf>,
+    depth: usize,
+) {
     if depth > 16 || out.len() > 50 {
         return;
     }
@@ -243,7 +256,11 @@ fn conflict_plan(file: &PresetFile, detail: String) -> PresetApplyPlan {
         action: "conflict".into(),
         detail,
         old_lines: Vec::new(),
-        new_lines: file.fragments.iter().flat_map(|f| f.lines.clone()).collect(),
+        new_lines: file
+            .fragments
+            .iter()
+            .flat_map(|f| f.lines.clone())
+            .collect(),
     }
 }
 
@@ -262,7 +279,10 @@ pub fn plan_file(
             return (
                 conflict_plan(
                     file,
-                    format!("目标里有多个同名文件，无法确定落点：{}", candidates.join("、")),
+                    format!(
+                        "目标里有多个同名文件，无法确定落点：{}",
+                        candidates.join("、")
+                    ),
                 ),
                 None,
             );
@@ -304,17 +324,17 @@ pub fn plan_file(
                 },
                 Some((dest, file.content.clone())),
             ),
-            Err(e) => (
-                conflict_plan(file, format!("读取目标文件失败：{e}")),
-                None,
-            ),
+            Err(e) => (conflict_plan(file, format!("读取目标文件失败：{e}")), None),
         };
     }
 
     // 片段模式：目标文件必须存在（精确路径或按文件名定位到）
     let Some(dest) = dest else {
         return (
-            conflict_plan(file, "目标文件不存在（按文件名也未找到），无法做行替换".into()),
+            conflict_plan(
+                file,
+                "目标文件不存在（按文件名也未找到），无法做行替换".into(),
+            ),
             None,
         );
     };
@@ -474,7 +494,11 @@ mod tests {
     fn plan_patches_multiple_fragments() {
         let dir = std::env::temp_dir().join(format!("preset-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("app.yml"), "h1\nurl: prod\nh2\nh3\npwd: prod\ntail\n").unwrap();
+        std::fs::write(
+            dir.join("app.yml"),
+            "h1\nurl: prod\nh2\nh3\npwd: prod\ntail\n",
+        )
+        .unwrap();
 
         let file = PresetFile {
             rel_path: "app.yml".into(),
@@ -507,7 +531,11 @@ mod tests {
         };
         let (plan, write) = plan_file(&dir, &file);
         assert_eq!(plan.action, "patch");
-        assert!(plan.detail.contains("已按文件名定位到"), "detail: {}", plan.detail);
+        assert!(
+            plan.detail.contains("已按文件名定位到"),
+            "detail: {}",
+            plan.detail
+        );
         let (dest, content) = write.expect("应有写入计划");
         assert_eq!(dest, nested.join("Constants.java"));
         assert_eq!(content, "a\nflag = dev;\nb\n");
@@ -529,7 +557,11 @@ mod tests {
         };
         let (plan, write) = plan_file(&dir, &file);
         assert_eq!(plan.action, "conflict");
-        assert!(plan.detail.contains("多个同名文件"), "detail: {}", plan.detail);
+        assert!(
+            plan.detail.contains("多个同名文件"),
+            "detail: {}",
+            plan.detail
+        );
         assert!(write.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }

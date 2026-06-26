@@ -116,7 +116,7 @@ export function getWorkingCopyTreePath(wc: WorkingCopyEntry): WorkingCopyTreeSeg
     const third = tail[2]
     const secondLower = second?.toLowerCase() ?? ''
 
-    // 本地工作目录通常是 项目 / 环境 / 模块，旧目录缺少环境层时补“默认”。
+    // 本地工作目录通常是 项目 / 环境或分支 / 模块；只有模块直接挂在项目根下才补“默认”。
     if (second && ENV_FOLDERS.has(secondLower)) {
       segments.push({
         key: `local:${project}/${second}`,
@@ -136,14 +136,29 @@ export function getWorkingCopyTreePath(wc: WorkingCopyEntry): WorkingCopyTreeSeg
     }
 
     if (second) {
-      const isModule = MODULE_FOLDERS.has(secondLower)
+      if (third) {
+        segments.push({
+          key: `local:${project}/${second}`,
+          label: second,
+          value: second,
+          kind: 'environment',
+        })
+        segments.push({
+          key: `local:${project}/${second}/${third}`,
+          label: third,
+          value: third,
+          kind: 'module',
+        })
+        return segments
+      }
+
       segments.push({
         key: `local:${project}/默认`,
         label: '默认',
         value: '默认',
         kind: 'environment',
       })
-      if (isModule || tail.length >= 2) {
+      if (tail.length >= 2) {
         segments.push({
           key: `local:${project}/默认/${second}`,
           label: second,

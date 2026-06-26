@@ -19,7 +19,6 @@ import {
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import ContextMenu, { type ContextMenuItem } from '@/components/ui-local/ContextMenu.vue'
 import { confirm } from '@/composables/use-confirm-dialog'
@@ -272,6 +271,30 @@ function selectWc(id: string) {
   emit('select', id)
 }
 
+function firstCopyForNode(node: WorkingCopyTreeNode): WorkingCopyEntry | null {
+  const available = node.copies.find((wc) => wc.available !== false)
+  if (available) return available
+  if (node.copies[0]) return node.copies[0]
+  for (const child of node.children) {
+    const wc = firstCopyForNode(child)
+    if (wc) return wc
+  }
+  return null
+}
+
+// 点击项目/分支目录时切换到该目录下的代表工作副本，避免只能点叶子路径。
+function selectNode(node: WorkingCopyTreeNode) {
+  const wc = firstCopyForNode(node)
+  if (wc) selectWc(wc.id)
+}
+
+function nodeHasSelected(node: WorkingCopyTreeNode): boolean {
+  const selectedId = store.selectedId
+  if (!selectedId) return false
+  if (node.copies.some((wc) => wc.id === selectedId)) return true
+  return node.children.some(nodeHasSelected)
+}
+
 function toggleNode(key: string) {
   const next = new Set(collapsedNodes.value)
   if (next.has(key)) next.delete(key)
@@ -288,14 +311,18 @@ const ctxWc = ref<WorkingCopyEntry | null>(null)
 
 const ctxItems: ContextMenuItem[] = [
   { key: 'log', label: '查看日志', icon: ScrollText },
+  { key: 'refresh', label: '重新读取 svn info', icon: RefreshCw },
+  { key: 'edit', label: '编辑显示名称', icon: Pencil },
   { key: 'sep1', separator: true, label: '' },
   { key: 'reveal', label: '在访达中打开', icon: FolderSearch },
   { key: 'terminal', label: '在终端中打开', icon: SquareTerminal },
   { key: 'sep2', separator: true, label: '' },
   { key: 'update', label: '从远程更新到本地', icon: DownloadCloud },
+  { key: 'remove', label: '从列表移除', icon: Trash2, danger: true },
 ]
 
 function openContextMenu(event: MouseEvent, wc: WorkingCopyEntry) {
+  selectWc(wc.id)
   ctxWc.value = wc
   ctxX.value = event.clientX
   ctxY.value = event.clientY
@@ -308,6 +335,12 @@ async function onCtxSelect(key: string) {
   switch (key) {
     case 'log':
       emit('viewLog', wc.id)
+      break
+    case 'refresh':
+      await refresh(wc.id)
+      break
+    case 'edit':
+      await startEdit(wc)
       break
     case 'reveal':
       try {
@@ -329,6 +362,9 @@ async function onCtxSelect(key: string) {
       } catch (e) {
         toast(e, '启动更新失败')
       }
+      break
+    case 'remove':
+      await remove(wc.id)
       break
   }
 }
@@ -411,13 +447,14 @@ function cancelEdit() {
       <template v-for="row in treeRows" :key="row.key">
         <button
           v-if="row.kind === 'node'"
-          :class="['root-row', 'tree-row', { 'child-row': row.depth > 0 }]"
+          :class="['root-row', 'tree-row', { 'child-row': row.depth > 0, active: nodeHasSelected(row.node) }]"
           :style="{ paddingLeft: rowIndent(row.depth) }"
           type="button"
-          @click="toggleNode(row.node.key)"
+          @click="selectNode(row.node)"
         >
           <ChevronDown
             :class="['root-chevron', { collapsed: collapsedNodes.has(row.node.key) }]"
+            @click.stop="toggleNode(row.node.key)"
           />
           <component
             :is="row.depth === 0 ? FolderGit2 : Folder"
@@ -446,12 +483,13 @@ function cancelEdit() {
           <div class="wc-row-main">
             <HardDrive class="wc-icon" />
             <div class="wc-text">
-              <div class="wc-name-wrap" @click.stop>
+              <div class="wc-name-wrap">
                 <template v-if="editingId === row.wc.id">
                   <Input
                     ref="editingInputRef"
                     v-model="editingValue"
                     class="edit-name-input"
+                    @click.stop
                     @keydown.enter="commitEdit"
                     @keydown.esc="cancelEdit"
                     @blur="commitEdit"
@@ -461,7 +499,6 @@ function cancelEdit() {
                   v-else
                   class="wc-name"
                   :title="fullTitle(row.wc)"
-                  @dblclick="startEdit(row.wc, copyLabel(row))"
                 >
                   {{ copyLabel(row) }}
                 </div>
@@ -474,53 +511,6 @@ function cancelEdit() {
                   :title="getDecodedBranchInfo(row.wc) || ''"
                 >{{ getSmartSubtitle(row.wc) }}</span>
               </div>
-            </div>
-            <div v-if="editingId !== row.wc.id" class="wc-actions" @click.stop>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      class="row-icon-btn"
-                      @click.stop="refresh(row.wc.id)"
-                    >
-                      <RefreshCw class="icon-xs" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>重新读取 svn info</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      class="row-icon-btn"
-                      @click.stop="startEdit(row.wc, copyLabel(row))"
-                    >
-                      <Pencil class="icon-xs" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>编辑显示名称（自动推断或自定义）</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      class="row-icon-btn danger-action"
-                      @click.stop="remove(row.wc.id)"
-                    >
-                      <Trash2 class="icon-xs" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>从列表移除</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
             </div>
           </div>
         </div>
@@ -610,6 +600,9 @@ function cancelEdit() {
 }
 .root-row:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.root-row.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .tree-row.child-row {
   min-height: 24px;
@@ -732,51 +725,6 @@ function cancelEdit() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.wc-actions {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 10;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 140ms ease-out;
-}
-.wc-item:hover .wc-actions,
-.wc-item.active .wc-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-.wc-item:hover .wc-actions {
-  /* subtle mask so long name text doesn't bleed through gaps between action buttons */
-  background: color-mix(in srgb, var(--fg) 3%, transparent);
-}
-.row-icon-btn {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  color: var(--fg-muted);
-}
-.row-icon-btn:hover {
-  color: var(--fg-strong);
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
-.wc-item.active .row-icon-btn {
-  color: rgba(255, 255, 255, 0.78);
-}
-.wc-item.active .row-icon-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.16);
-}
-.danger-action:hover {
-  color: var(--danger) !important;
-}
-.wc-item.active .danger-action:hover {
-  color: #ffd6d3 !important;
-}
-
 .icon-xs {
   width: 12px;
   height: 12px;
