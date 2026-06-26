@@ -35,10 +35,13 @@ impl ProcessRegistry {
     }
 
     fn register(&self, task_id: &str, child: Arc<Mutex<Child>>) {
-        self.inner
-            .lock()
-            .unwrap()
-            .insert(task_id.to_string(), ProcEntry { child, canceled: false });
+        self.inner.lock().unwrap().insert(
+            task_id.to_string(),
+            ProcEntry {
+                child,
+                canceled: false,
+            },
+        );
     }
 
     /// 标记取消并 kill 子进程。返回 task_id 是否存在（即任务是否还在运行）。

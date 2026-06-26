@@ -15,7 +15,9 @@ use crate::svn::list::{
     svn_cat_remote as run_svn_cat_remote, svn_list_remote as run_svn_list_remote,
 };
 use crate::svn::log::{svn_log, LogOptions};
-use crate::svn::merge::{build_preview, build_routes, fetch_revisions, MergePreview, MergeRevision, MergeRoute};
+use crate::svn::merge::{
+    build_preview, build_routes, fetch_revisions, MergePreview, MergeRevision, MergeRoute,
+};
 use crate::svn::package::{
     commit_version, fetch_package_revisions, package_zip, run_package_build, PackageBuildResult,
     PackageOptions, PackageRevision, PackageZipResult,
@@ -378,7 +380,11 @@ pub fn scan_and_add_project(
             .lock()
             .map_err(|_| AppError::Other("config 锁被污染".into()))?;
         for info in infos {
-            if let Some(existing) = cfg.working_copies.iter_mut().find(|wc| wc.path == info.path) {
+            if let Some(existing) = cfg
+                .working_copies
+                .iter_mut()
+                .find(|wc| wc.path == info.path)
+            {
                 existing.url = Some(info.url);
                 existing.repository_root = Some(info.repository_root);
                 existing.revision = Some(info.revision);
@@ -396,7 +402,7 @@ pub fn scan_and_add_project(
                     last_seen_at: Some(now.clone()),
                     relative_url: info.relative_url,
                     display_name: None,
-        available: true,
+                    available: true,
                 };
                 cfg.working_copies.push(entry.clone());
                 touched.push(entry);

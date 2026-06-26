@@ -30,27 +30,30 @@ fn classify_path(path: &str) -> Option<(String, String, Option<String>)> {
         return None;
     }
 
-    let tail: Vec<String> = if let Some(idx) = parts.iter().position(|p| p.eq_ignore_ascii_case("work")) {
-        if idx + 1 < parts.len() {
-            parts[idx + 1..].to_vec()
+    let tail: Vec<String> =
+        if let Some(idx) = parts.iter().position(|p| p.eq_ignore_ascii_case("work")) {
+            if idx + 1 < parts.len() {
+                parts[idx + 1..].to_vec()
+            } else {
+                return None;
+            }
+        } else if parts.len() >= 3 && is_env_folder(&parts[parts.len() - 2]) {
+            parts[parts.len() - 3..].to_vec()
         } else {
             return None;
-        }
-    } else if parts.len() >= 3 && is_env_folder(&parts[parts.len() - 2]) {
-        parts[parts.len() - 3..].to_vec()
-    } else {
-        return None;
-    };
+        };
 
     let project = tail.first()?.clone();
     let second = tail.get(1).cloned();
     let third = tail.get(2).cloned();
 
-    match second {
-        Some(env) if is_env_folder(&env) => Some((project, env, third)),
-        // 缺少环境层时归入「默认」，第二段视为模块
-        Some(module) => Some((project, "默认".to_string(), Some(module))),
-        None => Some((project, "默认".to_string(), None)),
+    match (second, third) {
+        (Some(env), module) if is_env_folder(&env) => Some((project, env, module)),
+        // 项目/1.0bugfix/rest 这类自定义分支要保留分支名；只有 项目/rest 才归入「默认」。
+        (Some(branch), Some(module)) => Some((project, branch, Some(module))),
+        // 缺少环境层时归入「默认」，第二段视为模块。
+        (Some(module), None) => Some((project, "默认".to_string(), Some(module))),
+        (None, _) => Some((project, "默认".to_string(), None)),
     }
 }
 
@@ -133,6 +136,7 @@ fn is_working_copy(dir: &Path) -> bool {
 /// 扫描一个项目根目录，找出其下所有工作副本路径。
 /// 识别两种布局：
 ///   - 项目/{develop,test,produce}/{rest,database,updatesql,个人分支...}
+///   - 项目/{自定义分支}/{模块}
 ///   - 项目/{模块}        （无环境层，模块直接挂在项目根下）
 /// 若根目录本身就是工作副本，则只返回它自己。
 pub fn scan_project_dir(root: &Path) -> AppResult<Vec<PathBuf>> {
@@ -155,7 +159,7 @@ pub fn scan_project_dir(root: &Path) -> AppResult<Vec<PathBuf>> {
         }
 
         if is_env_folder(name) {
-            // 环境目录本身不是工作副本，向下一层找模块 / 个人分支
+            // 标准环境目录本身不是工作副本，向下一层找模块 / 个人分支
             for sub in fs::read_dir(&path).map_err(AppError::Io)? {
                 let sub_path = sub.map_err(AppError::Io)?.path();
                 if sub_path.is_dir() && is_working_copy(&sub_path) {
@@ -164,6 +168,14 @@ pub fn scan_project_dir(root: &Path) -> AppResult<Vec<PathBuf>> {
             }
         } else if is_working_copy(&path) {
             found.push(path);
+        } else {
+            // 自定义分支目录（如 1.0bugfix/rest）也向下一层扫描工作副本。
+            for sub in fs::read_dir(&path).map_err(AppError::Io)? {
+                let sub_path = sub.map_err(AppError::Io)?.path();
+                if sub_path.is_dir() && is_working_copy(&sub_path) {
+                    found.push(sub_path);
+                }
+            }
         }
     }
 
@@ -173,4 +185,48 @@ pub fn scan_project_dir(root: &Path) -> AppResult<Vec<PathBuf>> {
     }
 
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_path;
+
+    #[test]
+    fn classify_custom_branch_under_work() {
+        let got = classify_path("/data/work/北京市属机关/1.0bugfix/rest");
+        assert_eq!(
+            got,
+            Some((
+                "北京市属机关".to_string(),
+                "1.0bugfix".to_string(),
+                Some("rest".to_string()),
+            ))
+        );
+    }
+
+    #[test]
+    fn classify_direct_module_as_default() {
+        let got = classify_path("/data/work/北京市属机关/rest");
+        assert_eq!(
+            got,
+            Some((
+                "北京市属机关".to_string(),
+                "默认".to_string(),
+                Some("rest".to_string()),
+            ))
+        );
+    }
+
+    #[test]
+    fn classify_standard_environment() {
+        let got = classify_path("/data/work/北京市属机关/develop/rest");
+        assert_eq!(
+            got,
+            Some((
+                "北京市属机关".to_string(),
+                "develop".to_string(),
+                Some("rest".to_string()),
+            ))
+        );
+    }
 }

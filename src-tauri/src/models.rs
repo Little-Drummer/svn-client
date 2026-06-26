@@ -206,7 +206,11 @@ pub struct SvnLogPath {
 // 流式 status 事件载荷，按 request_id 区分不同次刷新
 // rename_all 只改变体名，变体内字段要靠 rename_all_fields 才会变 camelCase（前端按 camelCase 读取）
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum StatusStreamEvent {
     Entries {
         request_id: String,
@@ -224,7 +228,11 @@ pub enum StatusStreamEvent {
 
 // 长任务事件载荷，字段命名同样依赖 rename_all_fields 与前端对齐
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum TaskEvent {
     Started {
         task_id: String,
