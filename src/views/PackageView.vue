@@ -201,6 +201,19 @@ function fmtSize(bytes: number) {
     ? `${(bytes / 1024).toFixed(1)} KB`
     : `${(bytes / 1024 / 1024).toFixed(2)} MB`
 }
+
+function formatDate(d?: string | null): string {
+  if (!d) return ''
+  try {
+    return new Date(d).toLocaleString('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).replace(/\//g, '-')
+  } catch {
+    return d.slice(0, 19).replace('T', ' ')
+  }
+}
 </script>
 
 <template>
@@ -266,7 +279,7 @@ function fmtSize(bytes: number) {
                 <div class="rev-head">
                   <span class="rev-num mono">r{{ r.revision }}</span>
                   <span class="rev-author">{{ r.author || '—' }}</span>
-                  <span class="rev-date">{{ (r.date || '').slice(0, 19).replace('T', ' ') }}</span>
+                  <span class="rev-date">{{ formatDate(r.date) }}</span>
                 </div>
                 <div class="rev-msg">{{ r.message }}</div>
               </div>
@@ -274,14 +287,12 @@ function fmtSize(bytes: number) {
           </div>
         </div>
         <p class="tip">提示：先在 IDEA 完成 Maven package，再构建增量包。不勾选版本则只复制全量产物而不提取增量。</p>
-      </section>
-
-      <!-- 构建 -->
-      <section class="block actions-block">
-        <Button :disabled="!canBuild" @click="build">
-          <Package class="icon-xs" />
-          {{ building ? '构建中…' : '构建增量包' }}
-        </Button>
+        <div class="build-action">
+          <Button :disabled="!canBuild" size="default" @click="build">
+            <Package class="icon-xs" />
+            {{ building ? '构建中…' : '构建增量包' }}
+          </Button>
+        </div>
       </section>
 
       <!-- 构建结果 -->
@@ -464,8 +475,10 @@ function fmtSize(bytes: number) {
   color: var(--fg-subtle);
   margin: 0;
 }
-.actions-block {
-  align-items: flex-start;
+.build-action {
+  display: flex;
+  padding-top: 4px;
+  border-top: var(--hairline) solid var(--stroke-soft);
 }
 .result-block {
   gap: 10px;

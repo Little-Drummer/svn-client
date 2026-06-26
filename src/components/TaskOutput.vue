@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { Ban, RotateCw, Terminal, Wrench } from 'lucide-vue-next'
+import { Ban, RotateCw, Terminal, Wrench, X } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { api, describeError } from '../api/svn'
 import { useTasksStore, type RunningTask } from '../stores/tasks'
 
-const props = defineProps<{ taskId: string | null }>()
-const emit = defineEmits<{ (e: 'retried', taskId: string): void }>()
+const props = defineProps<{ taskId: string | null; closable?: boolean }>()
+const emit = defineEmits<{ (e: 'retried', taskId: string): void; (e: 'close'): void }>()
 const tasksStore = useTasksStore()
 
 const task = computed<RunningTask | null>(() =>
@@ -367,6 +367,17 @@ watch(
       >
         <RotateCw class="icon-xs" :class="{ spin: retrying }" />
         重试
+      </Button>
+      <Button
+        v-if="closable && task.finished"
+        size="xs"
+        variant="ghost"
+        class="header-btn"
+        title="关闭日志"
+        @click="emit('close')"
+      >
+        <X class="icon-xs" />
+        关闭
       </Button>
     </div>
     <div v-if="cleanupError" class="cleanup-error">cleanup 失败：{{ cleanupError }}</div>

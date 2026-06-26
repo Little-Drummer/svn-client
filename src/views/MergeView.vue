@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { GitMerge, RefreshCw } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
@@ -43,6 +43,38 @@ const running = computed(() => {
   return !!t && !t.finished
 })
 
+// 预览区域可拖拽调整高度
+const previewHeight = ref(280)
+let resizeStartY = 0
+let resizeStartH = 0
+function startPreviewResize(e: MouseEvent) {
+  resizeStartY = e.clientY
+  resizeStartH = previewHeight.value
+  window.addEventListener('mousemove', onPreviewResize)
+  window.addEventListener('mouseup', stopPreviewResize)
+}
+function onPreviewResize(e: MouseEvent) {
+  previewHeight.value = Math.max(140, Math.min(700, resizeStartH + (resizeStartY - e.clientY)))
+}
+function stopPreviewResize() {
+  window.removeEventListener('mousemove', onPreviewResize)
+  window.removeEventListener('mouseup', stopPreviewResize)
+}
+onBeforeUnmount(stopPreviewResize)
+
+function formatDate(d?: string | null): string {
+  if (!d) return ''
+  try {
+    return new Date(d).toLocaleString('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).replace(/\//g, '-')
+  } catch {
+    return d.slice(0, 19).replace('T', ' ')
+  }
+}
+
 const filteredRevisions = computed(() => {
   const kw = filter.value.trim().toLowerCase()
   if (!kw) return revisions.value
@@ -60,6 +92,16 @@ onMounted(async () => {
   tasksStore.ensureListener()
   await loadProjects()
 })
+
+// 合并成功后自动刷新版本列表
+watch(
+  () => taskId.value ? tasksStore.tasks.get(taskId.value) : null,
+  (t) => {
+    if (t?.finished && t.success && route.value) {
+      fetchRevisions()
+    }
+  },
+)
 
 async function loadProjects() {
   try {
@@ -87,6 +129,7 @@ watch(
 async function onProjectChange() {
   route.value = null
   routes.value = []
+  taskId.value = null
   resetRevisions()
   if (!projectName.value) return
   loadingRoutes.value = true
@@ -111,6 +154,7 @@ function resetRevisions() {
 function selectRoute(r: MergeRoute) {
   if (running.value) return
   route.value = r
+  taskId.value = null
   resetRevisions()
 }
 
@@ -169,7 +213,7 @@ async function execute() {
   if (!route.value || selected.value.size === 0 || !message.value.trim()) return
   const ok = await confirm({
     title: '执行合并',
-    content: `将对目标工作副本执行 update → merge → commit${
+    content: `合并方向：${route.value.name}\n\n将对目标工作副本执行 update → merge → commit${
       route.value.syncBranch ? '（必要时先搁置本地修改并在提交后恢复）' : ''
     }。共 ${selected.value.size} 个版本。确认执行？`,
     confirmText: '执行合并',
@@ -248,6 +292,14 @@ async function execute() {
           <Button size="xs" variant="ghost" @click="selectAllVisible">全选</Button>
           <Button size="xs" variant="ghost" @click="clearSelection">清空</Button>
         </template>
+        <Button
+          v-if="selectedCount > 0"
+          size="xs"
+          :disabled="generating"
+          @click="generatePreview"
+        >
+          {{ generating ? '生成中…' : '生成合并日志' }}
+        </Button>
       </div>
 
       <div class="rev-list-wrap">
@@ -271,7 +323,7 @@ async function execute() {
               <div class="rev-head">
                 <span class="rev-num mono">r{{ r.revision }}</span>
                 <span class="rev-author">{{ r.author || '—' }}</span>
-                <span class="rev-date">{{ (r.date || '').slice(0, 19).replace('T', ' ') }}</span>
+                <span class="rev-date">{{ formatDate(r.date) }}</span>
               </div>
               <div class="rev-msg">{{ r.message }}</div>
             </div>
@@ -281,27 +333,30 @@ async function execute() {
     </div>
 
     <!-- 预览与执行 -->
-    <div v-if="route && selectedCount > 0" class="preview-block">
+    <div v-if="route && preview" class="preview-block" :style="{ height: previewHeight + 'px' }">
+      <div class="resize-handle" @mousedown.prevent="startPreviewResize" />
       <div class="preview-toolbar">
-        <Button size="xs" variant="ghost" :disabled="generating" @click="generatePreview">
-          生成合并日志
-        </Button>
-        <code v-if="preview" class="cmd mono">{{ preview.command }}</code>
+        <code class="cmd mono">{{ preview.command }}</code>
       </div>
       <Textarea
-        v-if="preview"
         v-model="message"
         class="merge-message mono"
         placeholder="合并日志（可编辑）"
       />
-      <div v-if="preview" class="exec-actions">
+      <div class="exec-actions">
         <Button :disabled="running || !message.trim()" @click="execute">
           {{ running ? '合并中…' : '执行合并' }}
         </Button>
       </div>
     </div>
 
-    <TaskOutput v-if="taskId" :task-id="taskId" @retried="taskId = $event" />
+    <TaskOutput
+      v-if="taskId"
+      :task-id="taskId"
+      closable
+      @retried="taskId = $event"
+      @close="taskId = null"
+    />
   </div>
 </template>
 
@@ -472,9 +527,25 @@ async function execute() {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 8px 12px 10px;
   border-top: var(--hairline) solid var(--stroke-soft);
   background: var(--mat-toolbar);
+  position: relative;
+  flex: none;
+  min-height: 140px;
+}
+.resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  cursor: ns-resize;
+  background: transparent;
+  transition: background 120ms;
+}
+.resize-handle:hover {
+  background: var(--accent-soft);
 }
 .preview-toolbar {
   display: flex;
@@ -491,8 +562,9 @@ async function execute() {
   white-space: nowrap;
 }
 .merge-message {
-  min-height: 120px;
-  max-height: 220px;
+  flex: 1;
+  min-height: 80px;
+  resize: none;
 }
 .exec-actions {
   display: flex;

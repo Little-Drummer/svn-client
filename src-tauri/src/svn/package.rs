@@ -472,12 +472,19 @@ pub fn run_package_build(
     if !rest.is_dir() {
         return Err(format!("rest 目录不存在：{rest_path}"));
     }
-    // 项目根：rest 的上级（develop/rest -> develop？不，提供包应放项目根）。
-    // 与脚本一致，提供包放在 rest 所属项目目录下，这里取 rest 的祖父目录（develop/rest -> 项目根）。
+    // 项目根：目录结构为 项目根/{develop,test,produce}/rest，需上溯两级。
+    // 若 rest 直接在项目根下（项目根/rest），只上溯一级，避免跑到错误路径。
+    const ENV_DIRS: &[&str] = &["develop", "test", "produce"];
     let project_root = rest
         .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
+        .map(|env_or_root| {
+            let env_name = env_or_root.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if ENV_DIRS.contains(&env_name) {
+                env_or_root.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| env_or_root.to_path_buf())
+            } else {
+                env_or_root.to_path_buf()
+            }
+        })
         .unwrap_or_else(|| rest.clone());
 
     let mut log = Vec::new();
