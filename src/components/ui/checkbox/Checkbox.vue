@@ -45,10 +45,14 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
   background: var(--mat-elevated);
   box-shadow: var(--stroke-control);
   cursor: pointer;
-  transition: background-color 140ms ease-out, box-shadow 140ms ease-out;
+  transition: background-color 140ms ease-out, box-shadow 140ms ease-out, transform 120ms ease-out;
 }
 .mac-checkbox:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--mat-elevated) 90%, var(--fg) 10%);
+  background: color-mix(in srgb, var(--mat-elevated) 76%, var(--accent) 24%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  transform: scale(1.04);
 }
 .mac-checkbox:focus-visible {
   outline: none;
@@ -65,6 +69,18 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
       var(--accent) 100%
     );
   box-shadow: var(--stroke-accent);
+}
+.mac-checkbox[data-state='checked']:hover:not(:disabled),
+.mac-checkbox[data-state='indeterminate']:hover:not(:disabled) {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent) 78%, white 22%) 0%,
+      color-mix(in srgb, var(--accent) 88%, black 12%) 100%
+    );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, white 56%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .mac-checkbox:disabled {
   opacity: 0.45;

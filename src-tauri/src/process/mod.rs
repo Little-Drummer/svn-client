@@ -76,8 +76,8 @@ pub fn spawn_status_stream(
     svn_bin: String,
     target: String,
     show_unversioned: bool,
+    request_id: String,
 ) -> String {
-    let request_id = Uuid::new_v4().to_string();
     let rid = request_id.clone();
 
     thread::spawn(move || {

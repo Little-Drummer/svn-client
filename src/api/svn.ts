@@ -93,8 +93,8 @@ export const api = {
   info: (path: string) => invoke<SvnInfo>('svn_get_info', { path }),
   status: (path: string, showUnversioned = true) =>
     invoke<SvnStatusEntry[]>('svn_get_status', { path, showUnversioned }),
-  statusStream: (path: string, showUnversioned = true) =>
-    invoke<string>('svn_get_status_stream', { path, showUnversioned }),
+  statusStream: (path: string, showUnversioned = true, requestId: string) =>
+    invoke<string>('svn_get_status_stream', { path, showUnversioned, requestId }),
   log: (params: {
     path: string
     limit?: number

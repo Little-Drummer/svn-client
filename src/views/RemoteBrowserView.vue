@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ArrowLeft, ChevronRight, DownloadCloud, Folder, FileText, ScrollText, Search, X } from 'lucide-vue-next'
+import { ArrowLeft, ChevronDown, ChevronRight, DownloadCloud, Folder, FileText, Loader2, ScrollText, Search, X } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,8 +17,24 @@ const props = defineProps<{ repository: RepositoryEntry | null }>()
 const emit = defineEmits<{ checkout: [repo: RepositoryEntry] }>()
 
 const toast = useAppToast()
+
+// 远端目录树节点:包一层 RemoteListEntry,附带懒加载与展开状态
+interface RemoteTreeNode {
+  entry: RemoteListEntry
+  depth: number
+  expanded: boolean
+  loading: boolean
+  loaded: boolean
+  error: boolean
+  children: RemoteTreeNode[]
+}
+
+function makeNode(entry: RemoteListEntry, depth: number): RemoteTreeNode {
+  return { entry, depth, expanded: false, loading: false, loaded: false, error: false, children: [] }
+}
+
 const currentUrl = ref('')
-const entries = ref<RemoteListEntry[]>([])
+const tree = ref<RemoteTreeNode[]>([])
 const selected = ref<RemoteListEntry | null>(null)
 const loading = ref(false)
 const contentLoading = ref(false)
@@ -29,10 +45,33 @@ const previewOpen = ref(false)
 const repoRoot = computed(() => props.repository?.url.trim().replace(/\/+$/, '') ?? '')
 
 const searchQuery = ref('')
-const filteredEntries = computed(() => {
+
+// 扁平化可见节点:无搜索时输出展开链路;搜索时只在已展开范围内过滤,命中项保留其祖先链
+const visibleNodes = computed<RemoteTreeNode[]>(() => {
   const kw = searchQuery.value.trim().toLowerCase()
-  if (!kw) return entries.value
-  return entries.value.filter((e) => e.name.toLowerCase().includes(kw))
+  if (!kw) {
+    const out: RemoteTreeNode[] = []
+    const walk = (nodes: RemoteTreeNode[]) => {
+      for (const n of nodes) {
+        out.push(n)
+        if (n.expanded && n.children.length) walk(n.children)
+      }
+    }
+    walk(tree.value)
+    return out
+  }
+  const collect = (nodes: RemoteTreeNode[]): RemoteTreeNode[] => {
+    const out: RemoteTreeNode[] = []
+    for (const n of nodes) {
+      const childMatches = n.expanded && n.children.length ? collect(n.children) : []
+      const selfMatch = n.entry.name.toLowerCase().includes(kw)
+      if (selfMatch || childMatches.length) {
+        out.push(n, ...childMatches)
+      }
+    }
+    return out
+  }
+  return collect(tree.value)
 })
 
 const crumbs = computed(() => {
@@ -74,22 +113,46 @@ async function load(url = currentUrl.value) {
   try {
     currentUrl.value = url.trim().replace(/\/+$/, '')
     manualUrl.value = currentUrl.value
-    entries.value = await api.listRemote({
+    const list = await api.listRemote({
       url: currentUrl.value,
       username: props.repository.username ?? undefined,
     })
+    tree.value = list.map((e) => makeNode(e, 0))
   } catch (e) {
-    entries.value = []
+    tree.value = []
     toast.error('加载远端目录失败', describeError(e))
   } finally {
     loading.value = false
   }
 }
 
-async function selectEntry(entry: RemoteListEntry) {
+// 单击仅选中;下钻交给双击,内嵌展开交给箭头
+function selectEntry(entry: RemoteListEntry) {
   selected.value = entry
-  if (entry.kind === 'dir') {
-    await load(entry.url)
+}
+
+// 点箭头:懒加载子项后内嵌展开;已加载过则纯翻转,失败可再点重试
+async function toggleExpand(node: RemoteTreeNode) {
+  if (node.entry.kind !== 'dir') return
+  if (node.loaded) {
+    node.expanded = !node.expanded
+    return
+  }
+  node.loading = true
+  node.error = false
+  try {
+    const list = await api.listRemote({
+      url: node.entry.url,
+      username: props.repository?.username ?? undefined,
+    })
+    node.children = list.map((e) => makeNode(e, node.depth + 1))
+    node.loaded = true
+    node.expanded = true
+  } catch (e) {
+    node.error = true
+    toast.error('加载子目录失败', describeError(e))
+  } finally {
+    node.loading = false
   }
 }
 
@@ -280,26 +343,39 @@ watch(
           </div>
           <div class="remote-scroll">
             <LoadingSpinner v-if="loading" />
-            <EmptyState v-else-if="entries.length === 0" description="目录为空" />
-            <EmptyState v-else-if="filteredEntries.length === 0" description="无匹配项" />
+            <EmptyState v-else-if="tree.length === 0" description="目录为空" />
+            <EmptyState v-else-if="visibleNodes.length === 0" description="无匹配项" />
             <template v-else>
               <div
-                v-for="entry in filteredEntries"
-                :key="entry.url"
-                :class="['remote-row', { active: selected?.url === entry.url }]"
-                @click="selectEntry(entry)"
-                @dblclick="previewEntry(entry)"
-                @contextmenu.prevent="openRowContextMenu($event, entry)"
+                v-for="node in visibleNodes"
+                :key="node.entry.url"
+                :class="['remote-row', { active: selected?.url === node.entry.url }]"
+                @click="selectEntry(node.entry)"
+                @dblclick="previewEntry(node.entry)"
+                @contextmenu.prevent="openRowContextMenu($event, node.entry)"
               >
-                <component
-                  :is="entry.kind === 'dir' ? Folder : FileText"
-                  :class="['entry-icon', entry.kind === 'dir' ? 'is-dir' : 'is-file']"
-                />
-                <span class="name" :title="entry.url">{{ entry.name }}</span>
-                <span class="size mono">{{ formatSize(entry.size) }}</span>
-                <span class="rev mono">{{ entry.revision ? `r${entry.revision}` : '' }}</span>
-                <span class="author mono">{{ entry.author ?? '' }}</span>
-                <span class="date mono">{{ formatDate(entry.date) }}</span>
+                <div class="entry-lead" :style="{ paddingLeft: `${node.depth * 16}px` }">
+                  <button
+                    v-if="node.entry.kind === 'dir'"
+                    type="button"
+                    :class="['expand-btn', { 'has-error': node.error }]"
+                    :title="node.error ? '加载失败,点击重试' : node.expanded ? '折叠' : '展开'"
+                    @click.stop="toggleExpand(node)"
+                  >
+                    <Loader2 v-if="node.loading" class="expand-icon spin" />
+                    <component v-else :is="node.expanded ? ChevronDown : ChevronRight" class="expand-icon" />
+                  </button>
+                  <span v-else class="expand-spacer" />
+                  <component
+                    :is="node.entry.kind === 'dir' ? Folder : FileText"
+                    :class="['entry-icon', node.entry.kind === 'dir' ? 'is-dir' : 'is-file']"
+                  />
+                  <span class="name" :title="node.entry.url">{{ node.entry.name }}</span>
+                </div>
+                <span class="size mono">{{ formatSize(node.entry.size) }}</span>
+                <span class="rev mono">{{ node.entry.revision ? `r${node.entry.revision}` : '' }}</span>
+                <span class="author mono">{{ node.entry.author ?? '' }}</span>
+                <span class="date mono">{{ formatDate(node.entry.date) }}</span>
               </div>
             </template>
           </div>
@@ -539,7 +615,7 @@ watch(
 }
 .remote-row {
   display: grid;
-  grid-template-columns: 16px minmax(180px, 1fr) 84px 72px 110px 170px;
+  grid-template-columns: minmax(200px, 1fr) 84px 72px 110px 170px;
   gap: 10px;
   align-items: center;
   min-height: 28px;
@@ -561,8 +637,53 @@ watch(
 .remote-row.active .rev,
 .remote-row.active .author,
 .remote-row.active .date,
-.remote-row.active .entry-icon {
+.remote-row.active .entry-icon,
+.remote-row.active .expand-icon {
   color: #fff;
+}
+.entry-lead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-subtle);
+  cursor: default;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.expand-btn:hover {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg);
+}
+.expand-btn.has-error {
+  color: var(--danger, #e5484d);
+}
+.expand-spacer {
+  width: 16px;
+  flex: none;
+}
+.expand-icon {
+  width: 13px;
+  height: 13px;
+}
+.spin {
+  animation: remote-spin 0.7s linear infinite;
+}
+@keyframes remote-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .entry-icon {
   width: 14px;
@@ -576,6 +697,8 @@ watch(
   color: var(--fg-muted);
 }
 .name {
+  flex: 1;
+  min-width: 0;
   color: var(--fg-strong);
   font-weight: 500;
 }

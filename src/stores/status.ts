@@ -62,8 +62,10 @@ export const useStatusStore = defineStore('status', () => {
     lastError.value = null
     try {
       await ensureListener()
-      const requestId = await api.statusStream(path, showUnversioned.value)
+      // command 返回前后端就可能推送事件，必须先登记 ID，避免小工作副本的快速结果被过滤。
+      const requestId = crypto.randomUUID()
       activeRequestId = requestId
+      await api.statusStream(path, showUnversioned.value, requestId)
     } catch (e: unknown) {
       lastError.value = String((e as { message?: string })?.message ?? e)
       entries.value = []
