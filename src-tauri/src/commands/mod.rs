@@ -810,6 +810,7 @@ pub fn svn_get_status_stream(
     state: State<ConfigState>,
     path: String,
     show_unversioned: Option<bool>,
+    request_id: String,
 ) -> AppResult<String> {
     let bin = state.svn_bin();
     Ok(spawn_status_stream(
@@ -817,6 +818,7 @@ pub fn svn_get_status_stream(
         bin,
         path,
         show_unversioned.unwrap_or(true),
+        request_id,
     ))
 }
 
