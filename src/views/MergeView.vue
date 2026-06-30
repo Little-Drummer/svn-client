@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { GitMerge, RefreshCw } from 'lucide-vue-next'
+import { GitMerge, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
 import TaskOutput from '@/components/TaskOutput.vue'
@@ -13,7 +20,7 @@ import { api } from '../api/svn'
 import { useTasksStore } from '../stores/tasks'
 import { useErrorToast } from '../composables/use-error-toast'
 import { confirm } from '../composables/use-confirm-dialog'
-import type { MergePreview, MergeRevision, MergeRoute, Project } from '../types/svn'
+import type { MergePreview, MergeRevision, MergeRoute, MergeRouteConfig, Project } from '../types/svn'
 
 const props = defineProps<{ activeProjectName?: string | null }>()
 
@@ -24,6 +31,10 @@ const projects = ref<Project[]>([])
 const projectName = ref<string>('')
 const routes = ref<MergeRoute[]>([])
 const route = ref<MergeRoute | null>(null)
+const routeConfigOpen = ref(false)
+const routeConfigs = ref<MergeRouteConfig[]>([])
+const loadingConfigs = ref(false)
+const savingConfigs = ref(false)
 
 const loadingRoutes = ref(false)
 const loadingRevisions = ref(false)
@@ -42,6 +53,134 @@ const running = computed(() => {
   const t = tasksStore.tasks.get(taskId.value)
   return !!t && !t.finished
 })
+const currentProject = computed(() => projects.value.find((p) => p.name === projectName.value) ?? null)
+const routeConfigsInvalid = computed(() =>
+  routeConfigs.value.some(
+    (config) =>
+      !config.sourceEnv ||
+      !config.sourceModule ||
+      !config.targetEnv ||
+      !config.targetModule,
+  ),
+)
+
+function branchOptions(selected?: string) {
+  const names = currentProject.value?.branches.map((branch) => branch.environment) ?? []
+  if (selected && !names.includes(selected)) return [...names, selected]
+  return names
+}
+
+function modulesForEnv(env: string) {
+  return currentProject.value?.branches.find((branch) => branch.environment === env)?.modules ?? []
+}
+
+function moduleOptions(env: string, selected?: string) {
+  const names = modulesForEnv(env).map((module) => module.module)
+  if (selected && !names.includes(selected)) return [...names, selected]
+  return names
+}
+
+function preferredBranch(name: string) {
+  return currentProject.value?.branches.find((branch) => branch.environment === name)?.environment
+}
+
+function preferredAnyBranch(names: string[]) {
+  for (const name of names) {
+    const found = preferredBranch(name)
+    if (found) return found
+  }
+  return null
+}
+
+function preferredModule(env: string, preferred = 'rest') {
+  const modules = modulesForEnv(env)
+  return modules.find((module) => module.module === preferred)?.module ?? modules[0]?.module ?? ''
+}
+
+function routeConfigLabel(config: MergeRouteConfig) {
+  return `${config.sourceEnv}/${config.sourceModule} -> ${config.targetEnv}/${config.targetModule}`
+}
+
+function syncRouteConfigName(config: MergeRouteConfig) {
+  config.name = routeConfigLabel(config)
+}
+
+function onConfigEnvChange(config: MergeRouteConfig, side: 'source' | 'target') {
+  if (side === 'source') {
+    const options = moduleOptions(config.sourceEnv)
+    if (!options.includes(config.sourceModule)) config.sourceModule = preferredModule(config.sourceEnv)
+  } else {
+    const options = moduleOptions(config.targetEnv)
+    if (!options.includes(config.targetModule)) config.targetModule = preferredModule(config.targetEnv)
+  }
+  syncRouteConfigName(config)
+}
+
+function hasConfigEndpoint(config: MergeRouteConfig, side: 'source' | 'target') {
+  const env = side === 'source' ? config.sourceEnv : config.targetEnv
+  const module = side === 'source' ? config.sourceModule : config.targetModule
+  return modulesForEnv(env).some((item) => item.module === module)
+}
+
+function configAvailable(config: MergeRouteConfig) {
+  return hasConfigEndpoint(config, 'source') && hasConfigEndpoint(config, 'target')
+}
+
+function createRouteConfig(): MergeRouteConfig {
+  const sourceEnv =
+    preferredAnyBranch(['produce', 'pro']) ?? currentProject.value?.branches[0]?.environment ?? ''
+  const targetEnv =
+    preferredBranch('1.0bugfix') ??
+    currentProject.value?.branches.find((branch) => branch.environment !== sourceEnv)?.environment ??
+    sourceEnv
+  const config: MergeRouteConfig = {
+    id: crypto.randomUUID(),
+    projectName: projectName.value,
+    name: '',
+    sourceEnv,
+    sourceModule: preferredModule(sourceEnv),
+    targetEnv,
+    targetModule: preferredModule(targetEnv),
+    enabled: true,
+  }
+  syncRouteConfigName(config)
+  return config
+}
+
+async function openRouteConfig() {
+  if (!projectName.value) return
+  routeConfigOpen.value = true
+  loadingConfigs.value = true
+  try {
+    routeConfigs.value = await api.mergeGetRouteConfigs(projectName.value)
+  } catch (e) {
+    toast(e, '加载合并方向配置失败')
+  } finally {
+    loadingConfigs.value = false
+  }
+}
+
+function addRouteConfig() {
+  routeConfigs.value = [...routeConfigs.value, createRouteConfig()]
+}
+
+function removeRouteConfig(id: string) {
+  routeConfigs.value = routeConfigs.value.filter((config) => config.id !== id)
+}
+
+async function saveRouteConfigs() {
+  if (!projectName.value) return
+  savingConfigs.value = true
+  try {
+    routeConfigs.value = await api.mergeSaveRouteConfigs(projectName.value, routeConfigs.value)
+    routeConfigOpen.value = false
+    await onProjectChange()
+  } catch (e) {
+    toast(e, '保存合并方向配置失败')
+  } finally {
+    savingConfigs.value = false
+  }
+}
 
 // 预览区域可拖拽调整高度
 const previewHeight = ref(280)
@@ -127,6 +266,7 @@ watch(
 )
 
 async function onProjectChange() {
+  routeConfigOpen.value = false
   route.value = null
   routes.value = []
   taskId.value = null
@@ -239,7 +379,7 @@ async function execute() {
   <div class="merge-view">
     <div class="merge-config">
       <!-- 项目 + 方向选择 -->
-      <div class="config-row">
+      <div class="config-row project-row">
         <span class="label">项目</span>
         <select
           v-model="projectName"
@@ -249,10 +389,22 @@ async function execute() {
         >
           <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}</option>
         </select>
+        <Button
+          size="xs"
+          variant="ghost"
+          class="route-settings-btn"
+          :disabled="running || !projectName"
+          @click="openRouteConfig"
+        >
+          <Settings2 class="settings-icon" />
+          <span>配置方向</span>
+        </Button>
       </div>
 
       <div class="routes-block">
-        <span class="label">合并方向</span>
+        <div class="routes-title">
+          <span class="label">合并方向</span>
+        </div>
         <div v-if="loadingRoutes" class="hint"><LoadingSpinner /> 识别方向中…</div>
         <div v-else-if="routes.length === 0" class="hint">
           该项目没有可识别的合并方向（需要 develop/test/produce 或个人分支）
@@ -357,6 +509,135 @@ async function execute() {
       @retried="taskId = $event"
       @close="taskId = null"
     />
+
+    <Dialog v-model:open="routeConfigOpen">
+      <DialogContent class="route-config-dialog">
+        <DialogHeader>
+          <DialogTitle>配置合并方向</DialogTitle>
+        </DialogHeader>
+
+        <div class="route-config-body">
+          <div class="route-config-head">
+            <span class="mono route-config-project">{{ projectName }}</span>
+            <Button
+              size="xs"
+              variant="secondary"
+              :disabled="loadingConfigs || !currentProject?.branches.length"
+              @click="addRouteConfig"
+            >
+              <Plus class="icon-xs" />
+              新增方向
+            </Button>
+          </div>
+
+          <div v-if="loadingConfigs" class="hint center"><LoadingSpinner /> 加载配置中…</div>
+          <EmptyState
+            v-else-if="routeConfigs.length === 0"
+            description="当前项目还没有自定义合并方向"
+          />
+          <div v-else class="route-config-list">
+            <div v-for="config in routeConfigs" :key="config.id" class="route-config-item">
+              <div class="route-config-line">
+                <Checkbox
+                  :model-value="config.enabled"
+                  title="启用"
+                  @update:model-value="(v) => (config.enabled = v === true)"
+                />
+                <input
+                  v-model="config.name"
+                  class="native-input route-name-input"
+                  placeholder="方向名称"
+                />
+                <Badge
+                  v-if="!configAvailable(config)"
+                  variant="outline"
+                  class="status-warning"
+                >
+                  缺少工作副本
+                </Badge>
+                <Button size="xs" variant="ghost" class="danger-action" @click="removeRouteConfig(config.id)">
+                  <Trash2 class="icon-xs" />
+                </Button>
+              </div>
+
+              <div class="route-config-grid">
+                <label class="route-field">
+                  <span>来源分支</span>
+                  <select
+                    v-model="config.sourceEnv"
+                    class="ui-select"
+                    @change="onConfigEnvChange(config, 'source')"
+                  >
+                    <option
+                      v-for="env in branchOptions(config.sourceEnv)"
+                      :key="`source-env-${config.id}-${env}`"
+                      :value="env"
+                    >
+                      {{ env }}
+                    </option>
+                  </select>
+                </label>
+                <label class="route-field">
+                  <span>来源模块</span>
+                  <select
+                    v-model="config.sourceModule"
+                    class="ui-select"
+                    @change="syncRouteConfigName(config)"
+                  >
+                    <option
+                      v-for="module in moduleOptions(config.sourceEnv, config.sourceModule)"
+                      :key="`source-module-${config.id}-${module}`"
+                      :value="module"
+                    >
+                      {{ module }}
+                    </option>
+                  </select>
+                </label>
+                <label class="route-field">
+                  <span>目标分支</span>
+                  <select
+                    v-model="config.targetEnv"
+                    class="ui-select"
+                    @change="onConfigEnvChange(config, 'target')"
+                  >
+                    <option
+                      v-for="env in branchOptions(config.targetEnv)"
+                      :key="`target-env-${config.id}-${env}`"
+                      :value="env"
+                    >
+                      {{ env }}
+                    </option>
+                  </select>
+                </label>
+                <label class="route-field">
+                  <span>目标模块</span>
+                  <select
+                    v-model="config.targetModule"
+                    class="ui-select"
+                    @change="syncRouteConfigName(config)"
+                  >
+                    <option
+                      v-for="module in moduleOptions(config.targetEnv, config.targetModule)"
+                      :key="`target-module-${config.id}-${module}`"
+                      :value="module"
+                    >
+                      {{ module }}
+                    </option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" :disabled="savingConfigs" @click="routeConfigOpen = false">取消</Button>
+          <Button :disabled="savingConfigs || loadingConfigs || routeConfigsInvalid" @click="saveRouteConfigs">
+            {{ savingConfigs ? '保存中…' : '保存配置' }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -381,6 +662,13 @@ async function execute() {
   align-items: center;
   gap: 10px;
 }
+.project-row {
+  min-width: 0;
+}
+.project-row .ui-select {
+  flex: 1;
+  min-width: 180px;
+}
 .label {
   font-size: var(--fs-callout);
   color: var(--fg-muted);
@@ -390,6 +678,84 @@ async function execute() {
 .routes-block {
   display: flex;
   gap: 10px;
+  align-items: flex-start;
+}
+.routes-title {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.route-settings-btn {
+  position: relative;
+  flex: none;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--fg);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--mat-elevated) 92%, white 8%), var(--mat-elevated));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 55%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--accent) 20%, var(--stroke-soft)),
+    0 8px 18px color-mix(in srgb, var(--accent) 10%, transparent);
+  transition:
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
+}
+.route-settings-btn::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 6px;
+  background:
+    linear-gradient(110deg, transparent 0%, color-mix(in srgb, white 28%, transparent) 42%, transparent 72%);
+  opacity: 0;
+  transform: translateX(-24px);
+  transition:
+    opacity 180ms ease,
+    transform 260ms ease;
+  pointer-events: none;
+}
+.route-settings-btn:hover:not(:disabled) {
+  color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 60%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--accent) 42%, var(--stroke-soft)),
+    0 10px 24px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.route-settings-btn:hover:not(:disabled)::before {
+  opacity: 1;
+  transform: translateX(36px);
+}
+.route-settings-btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow:
+    inset 0 1px 2px color-mix(in srgb, black 10%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--accent) 36%, var(--stroke-soft));
+}
+.settings-icon {
+  width: 13px;
+  height: 13px;
+  transition: transform 180ms ease;
+}
+.route-settings-btn:hover:not(:disabled) .settings-icon {
+  transform: rotate(18deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-settings-btn,
+  .route-settings-btn::before,
+  .settings-icon {
+    transition: none;
+  }
+  .route-settings-btn:hover:not(:disabled),
+  .route-settings-btn:hover:not(:disabled) .settings-icon {
+    transform: none;
+  }
 }
 .routes {
   display: flex;
@@ -445,6 +811,79 @@ async function execute() {
 }
 .native-input {
   max-width: 260px;
+}
+.route-config-dialog {
+  width: min(860px, calc(100vw - 48px));
+  max-width: none;
+}
+.route-config-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 260px;
+  max-height: min(620px, calc(100vh - 220px));
+  overflow: hidden;
+}
+.route-config-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.route-config-project {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.route-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+.route-config-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 7px;
+  background: var(--mat-elevated);
+  box-shadow: var(--stroke-control);
+}
+.route-config-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.route-name-input {
+  max-width: none;
+  min-width: 0;
+}
+.route-config-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+}
+.route-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--fs-caption);
+  color: var(--fg-muted);
+}
+.route-field .ui-select {
+  width: 100%;
+}
+.status-warning {
+  color: var(--warning, #9a6700);
+  border-color: color-mix(in srgb, currentColor 35%, transparent);
+}
+.danger-action {
+  color: var(--danger, #d1242f);
 }
 .revisions-block {
   display: flex;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { open } from '@tauri-apps/plugin-dialog'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   ChevronDown,
   DownloadCloud,
@@ -380,6 +380,24 @@ async function launchUpdate(wc: WorkingCopyEntry): Promise<string> {
     command: `svn update ${wc.path}`,
     retry: () => launchUpdate(wc),
   })
+  // 右键更新不经过 StatusView，成功后主动刷新工作副本 revision，保证历史页签标记不滞后。
+  const refreshWhenFinished = async () => {
+    const task = tasksStore.tasks.get(id)
+    if (task?.success) await refresh(wc.id)
+  }
+  let stop: (() => void) | null = null
+  stop = watch(
+    () => tasksStore.tasks.get(id)?.finished,
+    async (finished) => {
+      if (!finished) return
+      stop?.()
+      await refreshWhenFinished()
+    },
+  )
+  if (tasksStore.tasks.get(id)?.finished) {
+    stop?.()
+    await refreshWhenFinished()
+  }
   // 右键更新没有独立输出区，自动弹开任务中心让用户看到进度与结果
   tasksStore.openCenter()
   return id

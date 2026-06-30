@@ -52,7 +52,8 @@ async function launchUpdate(target: string, rev: string | undefined): Promise<st
 watch(
   () => taskId.value && tasksStore.tasks.get(taskId.value)?.finished,
   (finished) => {
-    if (finished) emit('done')
+    const task = taskId.value ? tasksStore.tasks.get(taskId.value) : null
+    if (finished && task?.success) emit('done')
   },
 )
 </script>

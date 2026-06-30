@@ -48,6 +48,21 @@ pub struct ProjectModule {
     pub url: Option<String>,
 }
 
+// 项目级自定义合并方向。默认方向仍由项目结构自动推断，这里只补充特殊流转。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeRouteConfig {
+    pub id: String,
+    pub project_name: String,
+    pub name: String,
+    pub source_env: String,
+    pub source_module: String,
+    pub target_env: String,
+    pub target_module: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
 // 本地开发配置预设：保存一组文件的「本地开发版本」内容（整文件或若干行片段），
 // 全局统一维护，不绑定项目，新项目可直接套用；拉取/切换分支后一键套回。
 #[derive(Debug, Clone, Serialize, Deserialize)]

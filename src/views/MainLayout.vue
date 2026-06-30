@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RefreshCw } from 'lucide-vue-next'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -227,6 +227,24 @@ async function refreshSelected() {
     toast.error('刷新失败', describeError(e))
   }
 }
+
+async function refreshSelectedRevisionForLog() {
+  const wc = selected.value
+  if (tab.value !== 'log' || !wc || selectedUnavailable.value) return
+  try {
+    // 进入历史页签时刷新 mixed revision 摘要，避免使用配置里旧的根目录 revision 打标。
+    await wcStore.refresh(wc.id)
+  } catch {
+    // 历史本身仍可按已有目标加载；这里只是不阻断页面。
+  }
+}
+
+watch(
+  [() => tab.value, () => selected.value?.id],
+  () => {
+    void refreshSelectedRevisionForLog()
+  },
+)
 
 function onWorkingCopySelect() {
   repoStore.select(null)

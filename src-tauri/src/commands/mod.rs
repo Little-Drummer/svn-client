@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    CapturePresetFile, ConfigPreset, PresetApplyPlan, Project, RemoteListEntry, RepositoryEntry,
-    SvnInfo, SvnLogEntry, SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry,
+    CapturePresetFile, ConfigPreset, MergeRouteConfig, PresetApplyPlan, Project, RemoteListEntry,
+    RepositoryEntry, SvnInfo, SvnLogEntry, SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry,
 };
 use crate::process::{spawn_merge_task, spawn_status_stream, spawn_svn_task, ProcessRegistry};
 use crate::storage::ConfigState;
@@ -16,7 +16,8 @@ use crate::svn::list::{
 };
 use crate::svn::log::{svn_log, LogOptions};
 use crate::svn::merge::{
-    build_preview, build_routes, fetch_revisions, MergePreview, MergeRevision, MergeRoute,
+    build_configured_routes, build_preview, build_routes, fetch_revisions, MergePreview,
+    MergeRevision, MergeRoute,
 };
 use crate::svn::package::{
     commit_version, fetch_package_revisions, package_zip, run_package_build, PackageBuildResult,
@@ -52,6 +53,15 @@ pub fn set_svn_bin(state: State<ConfigState>, bin: Option<String>) -> AppResult<
 }
 
 // ---------- 工作副本管理 ----------
+
+fn working_copy_display_revision(svn_bin: &str, path: &str, root_revision: u64) -> u64 {
+    // SVN 工作副本允许 mixed revision：根目录 revision 可能低于刚提交/更新过的子文件。
+    svn_status_verbose_all(svn_bin, path)
+        .ok()
+        .and_then(|items| items.into_iter().filter_map(|item| item.revision).max())
+        .map(|max_revision| max_revision.max(root_revision))
+        .unwrap_or(root_revision)
+}
 
 // ---------- 远端仓库管理 ----------
 
@@ -212,13 +222,14 @@ pub fn add_working_copy(state: State<ConfigState>, path: String) -> AppResult<Wo
         }
         other => other,
     })?;
+    let display_revision = working_copy_display_revision(&bin, &path, info.revision);
 
     let entry = WorkingCopyEntry {
         id: Uuid::new_v4().to_string(),
         path: info.path.clone(),
         url: Some(info.url),
         repository_root: Some(info.repository_root),
-        revision: Some(info.revision),
+        revision: Some(display_revision),
         last_seen_at: Some(Utc::now().to_rfc3339()),
         relative_url: info.relative_url.clone(),
         display_name: None,
@@ -282,6 +293,7 @@ pub fn refresh_working_copy(state: State<ConfigState>, id: String) -> AppResult<
 
     let bin = state.svn_bin();
     let info = svn_info(&bin, &path)?;
+    let display_revision = working_copy_display_revision(&bin, &path, info.revision);
 
     let mut cfg = state
         .config
@@ -294,7 +306,7 @@ pub fn refresh_working_copy(state: State<ConfigState>, id: String) -> AppResult<
         .ok_or_else(|| AppError::Other(format!("找不到工作副本 {}", id)))?;
     entry.url = Some(info.url);
     entry.repository_root = Some(info.repository_root);
-    entry.revision = Some(info.revision);
+    entry.revision = Some(display_revision);
     entry.last_seen_at = Some(Utc::now().to_rfc3339());
     entry.relative_url = info.relative_url.clone();
     // display_name 由用户手动维护，刷新时不覆盖
@@ -362,13 +374,14 @@ pub fn scan_and_add_project(
     let root = std::path::PathBuf::from(path.trim());
     let candidates = scan_project_dir(&root)?;
 
-    // 先在锁外把每个候选目录的 svn info 取齐，避免持锁期间执行子进程
+    // 先在锁外把每个候选目录的 svn 元信息取齐，避免持锁期间执行子进程
     let mut infos = Vec::new();
     for wc_path in candidates {
         let p = wc_path.to_string_lossy().to_string();
         // 个别子目录不是有效工作副本时跳过，不影响其余识别结果
         if let Ok(info) = svn_info(&bin, &p) {
-            infos.push(info);
+            let display_revision = working_copy_display_revision(&bin, &p, info.revision);
+            infos.push((info, display_revision));
         }
     }
 
@@ -379,7 +392,7 @@ pub fn scan_and_add_project(
             .config
             .lock()
             .map_err(|_| AppError::Other("config 锁被污染".into()))?;
-        for info in infos {
+        for (info, display_revision) in infos {
             if let Some(existing) = cfg
                 .working_copies
                 .iter_mut()
@@ -387,7 +400,7 @@ pub fn scan_and_add_project(
             {
                 existing.url = Some(info.url);
                 existing.repository_root = Some(info.repository_root);
-                existing.revision = Some(info.revision);
+                existing.revision = Some(display_revision);
                 existing.last_seen_at = Some(now.clone());
                 existing.relative_url = info.relative_url;
                 // 保留用户设置的 display_name
@@ -398,7 +411,7 @@ pub fn scan_and_add_project(
                     path: info.path,
                     url: Some(info.url),
                     repository_root: Some(info.repository_root),
-                    revision: Some(info.revision),
+                    revision: Some(display_revision),
                     last_seen_at: Some(now.clone()),
                     relative_url: info.relative_url,
                     display_name: None,
@@ -415,12 +428,87 @@ pub fn scan_and_add_project(
 
 // ---------- 多级合并 ----------
 
+fn normalize_merge_route_config(
+    project_name: &str,
+    mut config: MergeRouteConfig,
+) -> AppResult<MergeRouteConfig> {
+    config.project_name = project_name.trim().to_string();
+    config.source_env = config.source_env.trim().to_string();
+    config.source_module = config.source_module.trim().to_string();
+    config.target_env = config.target_env.trim().to_string();
+    config.target_module = config.target_module.trim().to_string();
+    config.name = config.name.trim().to_string();
+    if config.source_env.is_empty()
+        || config.source_module.is_empty()
+        || config.target_env.is_empty()
+        || config.target_module.is_empty()
+    {
+        return Err(AppError::Other("自定义合并方向的来源和目标不能为空".into()));
+    }
+    if config.id.trim().is_empty() {
+        config.id = Uuid::new_v4().to_string();
+    }
+    if config.name.is_empty() {
+        config.name = format!(
+            "{}/{} -> {}/{}",
+            config.source_env, config.source_module, config.target_env, config.target_module
+        );
+    }
+    Ok(config)
+}
+
+#[tauri::command]
+pub fn merge_get_route_configs(
+    state: State<ConfigState>,
+    project_name: String,
+) -> AppResult<Vec<MergeRouteConfig>> {
+    let project_name = project_name.trim().to_string();
+    let cfg = state
+        .config
+        .lock()
+        .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+    Ok(cfg
+        .merge_route_configs
+        .iter()
+        .filter(|config| config.project_name == project_name)
+        .cloned()
+        .collect())
+}
+
+#[tauri::command]
+pub fn merge_save_route_configs(
+    state: State<ConfigState>,
+    project_name: String,
+    configs: Vec<MergeRouteConfig>,
+) -> AppResult<Vec<MergeRouteConfig>> {
+    let project_name = project_name.trim().to_string();
+    if project_name.is_empty() {
+        return Err(AppError::Other("项目名称不能为空".into()));
+    }
+    let mut normalized = Vec::with_capacity(configs.len());
+    for config in configs {
+        normalized.push(normalize_merge_route_config(&project_name, config)?);
+    }
+    {
+        let mut cfg = state
+            .config
+            .lock()
+            .map_err(|_| AppError::Other("config 锁被污染".into()))?;
+        cfg.merge_route_configs
+            .retain(|config| config.project_name != project_name);
+        cfg.merge_route_configs.extend(normalized.clone());
+    }
+    state.save()?;
+    Ok(normalized)
+}
+
 /// 列出某个项目所有可用的合并方向。
 #[tauri::command]
 pub fn merge_list_routes(
     state: State<ConfigState>,
     project_name: String,
 ) -> AppResult<Vec<MergeRoute>> {
+    let project_name = project_name.trim().to_string();
     let cfg = state
         .config
         .lock()
@@ -430,7 +518,9 @@ pub fn merge_list_routes(
         .iter()
         .find(|p| p.name == project_name)
         .ok_or_else(|| AppError::Other(format!("找不到项目 {project_name}")))?;
-    Ok(build_routes(project))
+    let mut routes = build_routes(project);
+    routes.extend(build_configured_routes(project, &cfg.merge_route_configs));
+    Ok(routes)
 }
 
 /// 拉取某条合并方向下目标分支尚未包含的、可合入的版本（已过滤双向同步提交）。
@@ -795,10 +885,12 @@ pub async fn svn_get_status(
     state: State<'_, ConfigState>,
     path: String,
     show_unversioned: Option<bool>,
+    show_ignored: Option<bool>,
 ) -> AppResult<Vec<SvnStatusEntry>> {
     let bin = state.svn_bin();
     let show = show_unversioned.unwrap_or(true);
-    tauri::async_runtime::spawn_blocking(move || svn_status(&bin, &path, show))
+    let ignored = show_ignored.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || svn_status(&bin, &path, show, ignored))
         .await
         .map_err(|e| AppError::Other(format!("svn status 任务失败: {e}")))?
 }
@@ -810,6 +902,7 @@ pub fn svn_get_status_stream(
     state: State<ConfigState>,
     path: String,
     show_unversioned: Option<bool>,
+    show_ignored: Option<bool>,
     request_id: String,
 ) -> AppResult<String> {
     let bin = state.svn_bin();
@@ -818,6 +911,7 @@ pub fn svn_get_status_stream(
         bin,
         path,
         show_unversioned.unwrap_or(true),
+        show_ignored.unwrap_or(false),
         request_id,
     ))
 }
@@ -1088,7 +1182,7 @@ pub fn svn_start_commit(
     }
     let bin = state.svn_bin();
     for path in &paths {
-        let statuses = svn_status(&bin, path, true).unwrap_or_default();
+        let statuses = svn_status(&bin, path, true, false).unwrap_or_default();
         if statuses.iter().any(|entry| entry.item == "conflicted") {
             return Err(AppError::Other("存在冲突文件，解决冲突后才能提交".into()));
         }

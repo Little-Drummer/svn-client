@@ -99,6 +99,8 @@ pub fn run() {
             commands::set_working_copy_display_name,
             commands::list_projects,
             commands::scan_and_add_project,
+            commands::merge_get_route_configs,
+            commands::merge_save_route_configs,
             commands::merge_list_routes,
             commands::merge_fetch_revisions,
             commands::merge_preview,

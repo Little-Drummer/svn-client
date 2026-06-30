@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +27,19 @@ const dateTo = ref('')
 
 // 展开的提交（展开后内联显示其改动文件）
 const expanded = ref<Set<number>>(new Set())
+
+// SVN 工作副本 revision 是仓库全局版本，日志是当前路径历史；取不大于它的最新日志作为副本位置。
+const currentMarkerRevision = computed(() => {
+  const current = props.target.currentRevision
+  if (props.target.kind !== 'wc' || current == null) return null
+  let marker: number | null = null
+  for (const entry of entries.value) {
+    if (entry.revision <= current && (marker == null || entry.revision > marker)) {
+      marker = entry.revision
+    }
+  }
+  return marker
+})
 
 const logGen = createGeneration()
 
@@ -216,7 +229,7 @@ function actionClass(a: string) {
         <div v-for="e in entries" :key="e.revision" class="commit">
           <button
             type="button"
-            :class="['commit-row', { current: e.revision === target.currentRevision }]"
+            :class="['commit-row', { current: e.revision === currentMarkerRevision }]"
             @click="toggle(e.revision)"
           >
             <component
@@ -226,7 +239,11 @@ function actionClass(a: string) {
             <span class="rev mono">r{{ e.revision }}</span>
             <span class="msg">{{ firstLine(e.message) }}</span>
             <span class="spacer" />
-            <Badge v-if="e.revision === target.currentRevision" class="current-badge">
+            <Badge
+              v-if="e.revision === currentMarkerRevision"
+              class="current-badge"
+              :title="`当前副本 revision: r${target.currentRevision}`"
+            >
               当前副本
             </Badge>
             <span class="author mono">{{ e.author ?? '-' }}</span>

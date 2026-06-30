@@ -73,10 +73,14 @@ pub fn svn_log(svn_bin: &str, opts: &LogOptions) -> AppResult<Vec<SvnLogEntry>> 
         _ => None,
     };
 
-    if let Some(range) = opts.revision_range.or(date_range.as_deref()) {
-        args.push("-r".into());
-        args.push(range.into());
-    }
+    // 工作副本未 update 时，svn log 默认只看到本地基准版本；显式 HEAD:1 才能拉取远端最新历史。
+    let range = opts
+        .revision_range
+        .filter(|range| !range.trim().is_empty())
+        .or(date_range.as_deref())
+        .unwrap_or("HEAD:1");
+    args.push("-r".into());
+    args.push(range.into());
     if let Some(s) = opts.search {
         if !s.is_empty() {
             args.push("--search".into());

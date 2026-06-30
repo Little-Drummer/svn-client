@@ -59,10 +59,14 @@ pub fn svn_status(
     svn_bin: &str,
     target: &str,
     show_unversioned: bool,
+    show_ignored: bool,
 ) -> AppResult<Vec<SvnStatusEntry>> {
     let mut args = vec!["status", "--xml", "--non-interactive"];
-    if !show_unversioned {
+    if !show_unversioned && !show_ignored {
         args.push("--quiet");
+    }
+    if show_ignored {
+        args.push("--no-ignore");
     }
     args.push(target);
 
@@ -108,7 +112,14 @@ fn entry_to_status_with_options(entry: Entry, include_normal: bool) -> Option<Sv
 
 /// 获取包含 normal 项的 verbose 状态，用于文件列表补充 revision / author 列。
 pub fn svn_status_verbose_all(svn_bin: &str, target: &str) -> AppResult<Vec<SvnStatusEntry>> {
-    let args = vec!["status", "--xml", "--verbose", "--non-interactive", target];
+    let args = vec![
+        "status",
+        "--xml",
+        "--verbose",
+        "--non-interactive",
+        "--no-ignore",
+        target,
+    ];
     let out = run_svn(svn_bin, &args)?;
     let parsed: StatusRoot = quick_xml::de::from_str(&out.stdout)?;
 
@@ -130,14 +141,18 @@ pub fn svn_status_streaming<F>(
     svn_bin: &str,
     target: &str,
     show_unversioned: bool,
+    show_ignored: bool,
     mut on_entry: F,
 ) -> AppResult<()>
 where
     F: FnMut(SvnStatusEntry),
 {
     let mut args = vec!["status", "--xml", "--non-interactive"];
-    if !show_unversioned {
+    if !show_unversioned && !show_ignored {
         args.push("--quiet");
+    }
+    if show_ignored {
+        args.push("--no-ignore");
     }
     args.push(target);
 
