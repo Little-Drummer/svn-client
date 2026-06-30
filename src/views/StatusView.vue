@@ -146,13 +146,14 @@ function sortIcon(key: FileSortKey) {
   return sortState.value.direction === 'asc' ? ArrowUp : ArrowDown
 }
 
-// 可提交的项（不能 commit unversioned/ignored/normal/missing/external）
+// 提交面板可选择的状态；未跟踪文件会在提交前自动执行 svn add。
 const COMMITTABLE = new Set([
   'modified',
   'added',
   'deleted',
   'replaced',
   'conflicted',
+  'unversioned',
 ])
 
 const checkedCommittablePaths = computed(() =>
@@ -160,6 +161,11 @@ const checkedCommittablePaths = computed(() =>
     const entry = statusStore.entries.find((e) => e.path === path)
     return entry ? COMMITTABLE.has(entry.item) : false
   }),
+)
+const checkedUnversionedPaths = computed(() =>
+  checkedCommittablePaths.value.filter(
+    (path) => statusStore.entries.find((entry) => entry.path === path)?.item === 'unversioned',
+  ),
 )
 const statusByPath = computed(() => {
   const map = new Map<string, SvnStatusEntry>()
@@ -609,6 +615,11 @@ function openFileDiff(entry: SvnStatusEntry) {
 function openCommit() {
   leftMode.value = 'changes'
   rightPane.value = 'commit'
+}
+
+// 提交面板选择排除未跟踪文件时，同步取消左侧勾选，保证两侧提交范围一致。
+function excludeFromCommit(paths: string[]) {
+  for (const path of paths) checkedPaths.value.delete(path)
 }
 
 function openUpdate() {
@@ -1151,6 +1162,8 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
           v-else-if="rightPane === 'commit'"
           :working-copy="workingCopy"
           :checked-paths="checkedCommittablePaths"
+          :unversioned-paths="checkedUnversionedPaths"
+          @exclude="excludeFromCommit"
           @done="reload"
         />
         <UpdatePanel

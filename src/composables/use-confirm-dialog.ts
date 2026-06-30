@@ -21,7 +21,7 @@ const state = ref<ConfirmDialogState>({
   destructive: false,
 })
 
-let resolver: ((confirmed: boolean) => void) | null = null
+let resolver: ((confirmed: boolean | null) => void) | null = null
 
 export function confirm(options: ConfirmDialogOptions) {
   state.value = {
@@ -33,12 +33,12 @@ export function confirm(options: ConfirmDialogOptions) {
     destructive: options.destructive ?? false,
   }
 
-  return new Promise<boolean>((resolve) => {
+  return new Promise<boolean | null>((resolve) => {
     resolver = resolve
   })
 }
 
-export function resolveConfirm(confirmed: boolean) {
+export function resolveConfirm(confirmed: boolean | null) {
   state.value.open = false
   resolver?.(confirmed)
   resolver = null

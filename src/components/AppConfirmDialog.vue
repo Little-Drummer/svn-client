@@ -14,7 +14,7 @@ const dialog = useConfirmDialog()
 </script>
 
 <template>
-  <Dialog :open="dialog.state.value.open" @update:open="(open) => !open && dialog.resolveConfirm(false)">
+  <Dialog :open="dialog.state.value.open" @update:open="(open) => !open && dialog.resolveConfirm(null)">
     <DialogContent class="confirm-dialog">
       <DialogHeader>
         <DialogTitle>{{ dialog.state.value.title }}</DialogTitle>
@@ -47,6 +47,8 @@ const dialog = useConfirmDialog()
   backdrop-filter: blur(26px) saturate(150%);
 }
 .confirm-copy {
+  max-height: 50vh;
+  overflow-y: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
