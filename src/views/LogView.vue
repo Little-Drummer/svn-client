@@ -101,7 +101,6 @@ interface FileDiffState {
   rev: number
   path: string // repo-root-relative
   name: string // 文件名，用于语言识别与头部展示
-  mode: 'split' | 'unified'
 }
 const fileDiff = ref<FileDiffState | null>(null)
 const baseContent = ref<string | null>(null)
@@ -123,8 +122,11 @@ function fileUrl(path: string): string | null {
 async function openFileDiff(rev: number, p: SvnLogPath) {
   const name = p.path.split('/').filter(Boolean).pop() ?? p.path
   const url = fileUrl(p.path)
-  // 有完整文件 URL 才能取两版全文做左右对比；否则退回 unified 整版本 diff
-  fileDiff.value = { rev, path: p.path, name, mode: url ? 'split' : 'unified' }
+  if (!url) {
+    toast(new Error('缺少仓库根地址，无法读取文件的两个版本'), '无法打开文件对比')
+    return
+  }
+  fileDiff.value = { rev, path: p.path, name }
 
   const token = diffGen.next()
   baseContent.value = null
@@ -132,22 +134,16 @@ async function openFileDiff(rev: number, p: SvnLogPath) {
   diffText.value = null
   diffLoading.value = true
   try {
-    if (url) {
-      // 新增文件在 N-1 不存在、删除文件在 N 不存在 —— cat 失败都按空内容处理
-      const [base, cur, dt] = await Promise.all([
-        api.catRevision(url, Math.max(rev - 1, 0)).catch(() => ''),
-        api.catRevision(url, rev).catch(() => ''),
-        api.diffRevision(url, rev).catch(() => ''),
-      ])
-      if (!diffGen.isCurrent(token)) return
-      baseContent.value = base
-      currentContent.value = cur
-      diffText.value = dt
-    } else {
-      const dt = await api.diffRevision(props.target.target, rev)
-      if (!diffGen.isCurrent(token)) return
-      diffText.value = dt
-    }
+    // 新增文件在 N-1 不存在、删除文件在 N 不存在，读取失败的一侧按空内容处理。
+    const [base, cur, dt] = await Promise.all([
+      api.catRevision(url, Math.max(rev - 1, 0)).catch(() => ''),
+      api.catRevision(url, rev).catch(() => ''),
+      api.diffRevision(url, rev).catch(() => ''),
+    ])
+    if (!diffGen.isCurrent(token)) return
+    baseContent.value = base
+    currentContent.value = cur
+    diffText.value = dt
   } catch (e) {
     if (!diffGen.isCurrent(token)) return
     toast(e, '加载文件差异失败')
@@ -287,7 +283,6 @@ function actionClass(a: string) {
           :current-content="currentContent"
           :filename="fileDiff.name"
           :loading="diffLoading"
-          :initial-mode="fileDiff.mode"
         />
       </div>
     </div>

@@ -3,9 +3,13 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
   DownloadCloud,
   Folder,
   FolderGit2,
+  FolderMinus,
+  FolderOpen,
   FolderPlus,
   FolderSearch,
   HardDrive,
@@ -460,6 +464,55 @@ function toggleNode(key: string) {
   saveCollapsedNodes([...next])
 }
 
+function nodeKeys(node: WorkingCopyTreeNode): string[] {
+  return [node.key, ...node.children.flatMap(nodeKeys)]
+}
+
+const currentProject = computed(() => tree.value.find(nodeHasSelected) ?? null)
+const currentProjectNeedsExpand = computed(() => {
+  const project = currentProject.value
+  return !!project && nodeKeys(project).some((key) => collapsedNodes.value.has(key))
+})
+const allProjectsNeedExpand = computed(() =>
+  tree.value.some((project) => nodeKeys(project).some((key) => collapsedNodes.value.has(key))),
+)
+
+const currentProjectActionTitle = computed(() => {
+  if (!currentProject.value) return '请先选择一个工作副本'
+  return currentProjectNeedsExpand.value ? '展开当前项目' : '收起当前项目'
+})
+const allProjectsActionTitle = computed(() =>
+  allProjectsNeedExpand.value ? '展开全部项目' : '收起全部项目',
+)
+
+function persistCollapsedNodes(next: Set<string>) {
+  collapsedNodes.value = next
+  saveCollapsedNodes([...next])
+}
+
+// 当前项目展开时同时恢复全部子层级，收起时只隐藏项目根节点。
+function toggleCurrentProject() {
+  const project = currentProject.value
+  if (!project) return
+
+  const next = new Set(collapsedNodes.value)
+  if (currentProjectNeedsExpand.value) {
+    for (const key of nodeKeys(project)) next.delete(key)
+  } else {
+    next.add(project.key)
+  }
+  persistCollapsedNodes(next)
+}
+
+// 全部展开会清除所有折叠记录；全部收起只记录项目根节点。
+function toggleAllProjects() {
+  if (allProjectsNeedExpand.value) {
+    persistCollapsedNodes(new Set())
+    return
+  }
+  persistCollapsedNodes(new Set(tree.value.map((project) => project.key)))
+}
+
 // ===== 右键菜单 =====
 const ctxOpen = ref(false)
 const ctxX = ref(0)
@@ -606,6 +659,32 @@ function cancelEdit() {
     <div class="wc-section-head">
       <span class="section-title">工作副本</span>
       <div class="head-actions">
+        <div class="tree-actions">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            class="tree-action"
+            :disabled="!currentProject"
+            :title="currentProjectActionTitle"
+            :aria-label="currentProjectActionTitle"
+            @click="toggleCurrentProject"
+          >
+            <FolderOpen v-if="currentProjectNeedsExpand" class="icon-xs" />
+            <FolderMinus v-else class="icon-xs" />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            class="tree-action"
+            :disabled="tree.length === 0"
+            :title="allProjectsActionTitle"
+            :aria-label="allProjectsActionTitle"
+            @click="toggleAllProjects"
+          >
+            <ChevronsUpDown v-if="allProjectsNeedExpand" class="icon-xs" />
+            <ChevronsDownUp v-else class="icon-xs" />
+          </Button>
+        </div>
         <Button size="xs" variant="ghost" class="head-action" title="选项目根目录，自动识别所有分支模块" @click="pickAndScanProject">
           <FolderPlus class="icon-xs" />
           项目
@@ -779,6 +858,22 @@ function cancelEdit() {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+.tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-right: 3px;
+  margin-right: 1px;
+  border-right: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.tree-action {
+  width: 22px;
+  height: 22px;
+  color: var(--fg-muted);
+}
+.tree-action:hover:not(:disabled) {
+  color: var(--fg-strong);
 }
 .head-action {
   height: 22px;

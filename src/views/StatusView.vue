@@ -216,6 +216,28 @@ function rawFileStatus(path: string) {
   return statusByPath.value.get(path)?.item ?? fileTreeByPath.value.get(path)?.svnItem ?? 'normal'
 }
 
+const inheritedModifiedStatusByPath = computed(() => {
+  const statuses = new Map<string, string>()
+
+  // 子孙节点存在已修改项时，逐级为普通父目录传递“已修改”状态。
+  function visit(entry: WorkingCopyFileEntry): boolean {
+    const ownStatus = rawFileStatus(entry.path)
+    let hasModified = ownStatus === 'modified'
+
+    for (const child of entry.children) {
+      if (visit(child)) hasModified = true
+    }
+
+    if (entry.kind === 'dir' && ownStatus === 'normal' && hasModified) {
+      statuses.set(entry.path, 'modified')
+    }
+    return hasModified
+  }
+
+  for (const entry of fileTree.value) visit(entry)
+  return statuses
+})
+
 function fileRevision(entry: WorkingCopyFileEntry) {
   const status = statusByPath.value.get(entry.path)
   return status?.commitRevision ?? status?.revision ?? entry.commitRevision ?? entry.revision ?? null
@@ -609,9 +631,25 @@ watch(selectedFile, async (entry) => {
   baseContent.value = null
   currentContent.value = null
   if (!entry) return
-  // unversioned/ignored 不能 svn diff
+  // 未跟踪/忽略文件以空 BASE 对比当前内容；丢失文件则以 BASE 对比空内容。
   if (entry.item === 'unversioned' || entry.item === 'ignored' || entry.item === 'missing') {
+    diffLoading.value = true
     diffText.value = ''
+    try {
+      if (entry.item === 'missing') {
+        const base = await api.baseContent(entry.path).catch(() => '')
+        if (!diffGen.isCurrent(token)) return
+        baseContent.value = base
+        currentContent.value = ''
+      } else {
+        const current = await api.readFileText(entry.path).catch(() => '')
+        if (!diffGen.isCurrent(token)) return
+        baseContent.value = ''
+        currentContent.value = current
+      }
+    } finally {
+      if (diffGen.isCurrent(token)) diffLoading.value = false
+    }
     return
   }
   diffLoading.value = true
@@ -695,7 +733,7 @@ function shortName(p: string) {
 }
 
 function fileStatus(path: string) {
-  return rawFileStatus(path)
+  return inheritedModifiedStatusByPath.value.get(path) ?? rawFileStatus(path)
 }
 
 function fileStatusLabel(path: string) {
