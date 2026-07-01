@@ -31,6 +31,8 @@ struct Entry {
     path: String,
     #[serde(rename = "wc-status")]
     wc_status: Option<WcStatus>,
+    #[serde(rename = "repos-status")]
+    repos_status: Option<ReposStatus>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +56,14 @@ struct Commit {
     date: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReposStatus {
+    #[serde(rename = "@item")]
+    item: String,
+    #[serde(rename = "@props")]
+    props: Option<String>,
+}
+
 /// 获取工作副本状态。show_unversioned=true 时显示未跟踪文件
 pub fn svn_status(
     svn_bin: &str,
@@ -61,7 +71,30 @@ pub fn svn_status(
     show_unversioned: bool,
     show_ignored: bool,
 ) -> AppResult<Vec<SvnStatusEntry>> {
+    svn_status_with_options(svn_bin, target, show_unversioned, show_ignored, false)
+}
+
+/// 获取带远端检查的工作副本状态，用于统计本地未提交与远端未更新数量。
+pub fn svn_status_with_updates(
+    svn_bin: &str,
+    target: &str,
+    show_unversioned: bool,
+    show_ignored: bool,
+) -> AppResult<Vec<SvnStatusEntry>> {
+    svn_status_with_options(svn_bin, target, show_unversioned, show_ignored, true)
+}
+
+fn svn_status_with_options(
+    svn_bin: &str,
+    target: &str,
+    show_unversioned: bool,
+    show_ignored: bool,
+    check_updates: bool,
+) -> AppResult<Vec<SvnStatusEntry>> {
     let mut args = vec!["status", "--xml", "--non-interactive"];
+    if check_updates {
+        args.push("-u");
+    }
     if !show_unversioned && !show_ignored {
         args.push("--quiet");
     }
@@ -91,7 +124,24 @@ fn entry_to_status(entry: Entry) -> Option<SvnStatusEntry> {
 
 fn entry_to_status_with_options(entry: Entry, include_normal: bool) -> Option<SvnStatusEntry> {
     let wc = entry.wc_status?;
-    if !include_normal && wc.item == "normal" && wc.props.as_deref().unwrap_or("none") == "none" {
+    let repos_item = entry
+        .repos_status
+        .as_ref()
+        .map(|status| status.item.clone());
+    let repos_props = entry
+        .repos_status
+        .as_ref()
+        .and_then(|status| status.props.clone());
+    let local_normal = wc.item == "normal" && wc.props.as_deref().unwrap_or("none") == "none";
+    let remote_normal = repos_item
+        .as_deref()
+        .map(|item| item == "normal" || item == "none")
+        .unwrap_or(true)
+        && repos_props
+            .as_deref()
+            .map(|props| props == "none")
+            .unwrap_or(true);
+    if !include_normal && local_normal && remote_normal {
         return None;
     }
     let (commit_revision, commit_author, commit_date) = match wc.commit {
@@ -107,6 +157,8 @@ fn entry_to_status_with_options(entry: Entry, include_normal: bool) -> Option<Sv
         commit_revision,
         commit_author,
         commit_date,
+        repos_item,
+        repos_props,
     })
 }
 

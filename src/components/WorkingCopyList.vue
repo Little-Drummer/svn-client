@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { open } from '@tauri-apps/plugin-dialog'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ChevronDown,
   DownloadCloud,
@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import ContextMenu, { type ContextMenuItem } from '@/components/ui-local/ContextMenu.vue'
+import WorkingCopyChangesPopover from './WorkingCopyChangesPopover.vue'
 import { confirm } from '@/composables/use-confirm-dialog'
 import { loadCollapsedNodes, saveCollapsedNodes } from '../lib/ui-state'
 import { api } from '../api/svn'
@@ -28,7 +29,7 @@ import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useRepositoriesStore } from '../stores/repositories'
 import { useTasksStore } from '../stores/tasks'
 import { useErrorToast } from '../composables/use-error-toast'
-import type { WorkingCopyEntry } from '../types/svn'
+import type { WorkingCopyEntry, WorkingCopyStatusSummary } from '../types/svn'
 import {
   getWorkingCopyLeafLabel,
   getWorkingCopyTreePath,
@@ -54,6 +55,20 @@ const toast = useErrorToast()
 const items = computed(() => store.items)
 // 折叠的节点 key 从本地恢复，保持上次的展开/折叠形态
 const collapsedNodes = ref<Set<string>>(new Set(loadCollapsedNodes()))
+
+interface WorkingCopySummaryState extends WorkingCopyStatusSummary {
+  loading: boolean
+  error: boolean
+}
+
+const summaryById = ref<Record<string, WorkingCopySummaryState>>({})
+let summaryGeneration = 0
+const summaryRequestVersions = new Map<string, number>()
+const summaryReloadTimers = new Map<string, ReturnType<typeof window.setTimeout>>()
+const changesPopoverWc = ref<WorkingCopyEntry | null>(null)
+const changesPopoverOpen = ref(false)
+const changesPopoverX = ref(0)
+const changesPopoverY = ref(0)
 
 interface WorkingCopyTreeNode {
   key: string
@@ -209,11 +224,153 @@ onMounted(() => {
   store.reload().catch(toast)
 })
 
+watch(
+  items,
+  (list) => {
+    void reloadSummaries(list)
+  },
+  { immediate: true },
+)
+
+// update、commit 或手动刷新完成后，只刷新 Store 指定的工作副本统计。
+watch(
+  () => store.statusRefreshRequest,
+  (request) => {
+    if (request) scheduleSummaryReload(request.id)
+  },
+)
+
+// 任务 Store 显式发布完成信号，极快任务在注册时回放 finished 事件也不会漏刷新。
+watch(
+  () => tasksStore.completedTask,
+  (task) => {
+    if (
+      task?.success &&
+      task.workingCopyId &&
+      (task.kind === 'update' || task.kind === 'commit')
+    ) {
+      scheduleSummaryReload(task.workingCopyId)
+    }
+  },
+)
+
+onUnmounted(() => {
+  for (const timer of summaryReloadTimers.values()) window.clearTimeout(timer)
+  summaryReloadTimers.clear()
+})
+
+function hasSummaryValue(summary: WorkingCopySummaryState | undefined) {
+  return !!summary && (summary.loading || summary.error || summary.uncommitted > 0 || summary.outdated > 0)
+}
+
+function summaryTitle(summary: WorkingCopySummaryState | undefined) {
+  if (!summary) return '正在统计工作副本状态'
+  if (summary.error) return '状态统计失败，右键刷新后会重新读取'
+  if (summary.loading) return '正在统计工作副本状态'
+  return `未提交 ${summary.uncommitted}，未更新 ${summary.outdated}`
+}
+
+function openLocalChanges(event: MouseEvent, wc: WorkingCopyEntry) {
+  const target = event.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  const sameCopy = changesPopoverWc.value?.id === wc.id
+  if (sameCopy && changesPopoverOpen.value) {
+    changesPopoverOpen.value = false
+    return
+  }
+  changesPopoverWc.value = wc
+  changesPopoverX.value = rect.right + 8
+  changesPopoverY.value = rect.top - 8
+  changesPopoverOpen.value = true
+}
+
+async function reloadSummaries(list: WorkingCopyEntry[]) {
+  const generation = ++summaryGeneration
+  const keepIds = new Set(list.map((wc) => wc.id))
+  const next: Record<string, WorkingCopySummaryState> = {}
+  for (const wc of list) {
+    const old = summaryById.value[wc.id]
+    next[wc.id] = old ?? { uncommitted: 0, outdated: 0, loading: wc.available !== false, error: false }
+    if (wc.available === false) {
+      next[wc.id] = { uncommitted: 0, outdated: 0, loading: false, error: false }
+    }
+  }
+  summaryById.value = next
+
+  const queue = list.filter((wc) => wc.available !== false && keepIds.has(wc.id))
+  const concurrency = 3
+  let cursor = 0
+
+  async function worker() {
+    while (cursor < queue.length && generation === summaryGeneration) {
+      const wc = queue[cursor++]
+      await reloadSummary(wc, () => generation === summaryGeneration)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker))
+}
+
+function reloadSummaryById(id: string) {
+  const wc = store.items.find((item) => item.id === id)
+  if (!wc || wc.available === false) {
+    return Promise.resolve()
+  }
+  return reloadSummary(wc)
+}
+
+// 合并同一副本紧邻的任务完成和 info 刷新通知，并给 SVN 元数据留出短暂稳定时间。
+function scheduleSummaryReload(id: string) {
+  const current = summaryReloadTimers.get(id)
+  if (current) window.clearTimeout(current)
+  const timer = window.setTimeout(() => {
+    summaryReloadTimers.delete(id)
+    void reloadSummaryById(id)
+  }, 200)
+  summaryReloadTimers.set(id, timer)
+}
+
+// 单副本请求独立编号，连续刷新时只接受最后一次返回结果。
+async function reloadSummary(
+  wc: WorkingCopyEntry,
+  isCurrent: () => boolean = () => true,
+) {
+  const requestVersion = (summaryRequestVersions.get(wc.id) ?? 0) + 1
+  summaryRequestVersions.set(wc.id, requestVersion)
+  summaryById.value = {
+    ...summaryById.value,
+    [wc.id]: {
+      ...(summaryById.value[wc.id] ?? { uncommitted: 0, outdated: 0 }),
+      loading: true,
+      error: false,
+    },
+  }
+  try {
+    const summary = await api.statusSummary(wc.path)
+    if (!isCurrent() || summaryRequestVersions.get(wc.id) !== requestVersion) return
+    summaryById.value = {
+      ...summaryById.value,
+      [wc.id]: { ...summary, loading: false, error: false },
+    }
+  } catch {
+    if (!isCurrent() || summaryRequestVersions.get(wc.id) !== requestVersion) return
+    summaryById.value = {
+      ...summaryById.value,
+      [wc.id]: {
+        ...(summaryById.value[wc.id] ?? { uncommitted: 0, outdated: 0 }),
+        loading: false,
+        error: true,
+      },
+    }
+  }
+}
+
 async function pickAndAdd() {
   try {
     const dir = await open({ directory: true, multiple: false, title: '选择 SVN 工作副本目录' })
     if (!dir || typeof dir !== 'string') return
     await store.add(dir)
+    void reloadSummaries(store.items)
   } catch (e) {
     toast(e, '添加工作副本失败')
   }
@@ -376,6 +533,7 @@ async function launchUpdate(wc: WorkingCopyEntry): Promise<string> {
   tasksStore.register({
     taskId: id,
     kind: 'update',
+    workingCopyId: wc.id,
     title: `更新 ${name} 到 HEAD`,
     command: `svn update ${wc.path}`,
     retry: () => launchUpdate(wc),
@@ -530,6 +688,48 @@ function cancelEdit() {
                 >{{ getSmartSubtitle(row.wc) }}</span>
               </div>
             </div>
+            <Transition name="summary-pop">
+              <div
+                v-if="hasSummaryValue(summaryById[row.wc.id])"
+                :class="[
+                  'wc-summary',
+                  {
+                    loading: summaryById[row.wc.id]?.loading,
+                    error: summaryById[row.wc.id]?.error,
+                  },
+                ]"
+                :title="summaryTitle(summaryById[row.wc.id])"
+              >
+                <button
+                  v-if="summaryById[row.wc.id]?.uncommitted || summaryById[row.wc.id]?.loading"
+                  type="button"
+                  :class="[
+                    'summary-chip',
+                    'summary-local',
+                    'summary-local-button',
+                    { skeleton: summaryById[row.wc.id]?.loading },
+                  ]"
+                  :disabled="summaryById[row.wc.id]?.loading"
+                  :aria-label="`查看 ${summaryById[row.wc.id]?.uncommitted || 0} 个本地更改文件`"
+                  title="查看本地更改文件"
+                  data-local-changes-trigger
+                  @click.stop="openLocalChanges($event, row.wc)"
+                >
+                  <span class="summary-number mono">
+                    {{ summaryById[row.wc.id]?.loading ? '' : summaryById[row.wc.id]?.uncommitted }}
+                  </span>
+                </button>
+                <span
+                  v-if="summaryById[row.wc.id]?.outdated || summaryById[row.wc.id]?.loading"
+                  :class="['summary-chip', 'summary-remote', { skeleton: summaryById[row.wc.id]?.loading }]"
+                >
+                  <span class="summary-number mono">
+                    {{ summaryById[row.wc.id]?.loading ? '' : summaryById[row.wc.id]?.outdated }}
+                  </span>
+                </span>
+                <span v-if="summaryById[row.wc.id]?.error" class="summary-chip summary-error mono">!</span>
+              </div>
+            </Transition>
           </div>
         </div>
       </template>
@@ -541,6 +741,12 @@ function cancelEdit() {
       :y="ctxY"
       :items="ctxItems"
       @select="onCtxSelect"
+    />
+    <WorkingCopyChangesPopover
+      v-model:open="changesPopoverOpen"
+      :x="changesPopoverX"
+      :y="changesPopoverY"
+      :working-copy="changesPopoverWc"
     />
   </div>
 </template>
@@ -688,7 +894,7 @@ function cancelEdit() {
 .wc-row-main {
   position: relative;
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
@@ -742,6 +948,170 @@ function cancelEdit() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.wc-summary {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0;
+  min-width: 0;
+  max-width: 82px;
+  height: 20px;
+  padding: 1px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--mat-elevated) 58%, transparent);
+  backdrop-filter: blur(16px) saturate(150%);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--fg) 14%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 1px 2px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+}
+.wc-summary::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent 55%);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.wc-summary::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.36), transparent);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-115%);
+}
+.wc-summary.loading {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.wc-summary.loading::after {
+  opacity: 1;
+  animation: summary-sheen 1.35s ease-in-out infinite;
+}
+.wc-summary.error {
+  background: color-mix(in srgb, var(--danger) 10%, var(--mat-elevated) 70%);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--danger) 34%, transparent),
+    0 1px 2px rgba(15, 23, 42, 0.05);
+}
+.summary-chip {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 0;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  font-feature-settings: 'tnum';
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease-out,
+    color 140ms ease-out,
+    transform 140ms ease-out;
+}
+.summary-chip:first-child {
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+.summary-chip:last-child {
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+.summary-chip:only-child {
+  border-radius: var(--radius-pill);
+}
+.summary-chip + .summary-chip {
+  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--fg) 13%, transparent);
+}
+.summary-local {
+  color: color-mix(in srgb, var(--warning) 64%, var(--fg-strong));
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+}
+.summary-local-button {
+  border: 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+.summary-local-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+}
+.summary-local-button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.summary-local-button:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: -1px;
+}
+.summary-local-button:disabled {
+  cursor: default;
+}
+.summary-remote {
+  color: color-mix(in srgb, var(--accent) 74%, var(--fg-strong));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.summary-number {
+  min-width: 6px;
+  text-align: center;
+  letter-spacing: 0;
+}
+.summary-chip.skeleton {
+  width: 26px;
+  color: transparent;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.summary-chip.skeleton .summary-number {
+  opacity: 0;
+}
+.summary-error {
+  min-width: 16px;
+  height: 18px;
+  color: #fff;
+  background: var(--danger);
+}
+.wc-item.active .wc-summary {
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.wc-item.active .summary-local {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+}
+.wc-item.active .summary-local-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.3);
+}
+.wc-item.active .summary-remote {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.26);
+}
+.summary-pop-enter-active,
+.summary-pop-leave-active {
+  transition:
+    opacity 150ms ease-out,
+    transform 170ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.summary-pop-enter-from,
+.summary-pop-leave-to {
+  opacity: 0;
+  transform: translateX(5px) scale(0.94);
+}
+@keyframes summary-sheen {
+  0% {
+    transform: translateX(-115%);
+  }
+  100% {
+    transform: translateX(115%);
+  }
 }
 .icon-xs {
   width: 12px;

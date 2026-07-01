@@ -208,6 +208,13 @@ export interface SvnStatusEntry {
   commitRevision?: number | null
   commitAuthor?: string | null
   commitDate?: string | null
+  reposItem?: string | null
+  reposProps?: string | null
+}
+
+export interface WorkingCopyStatusSummary {
+  uncommitted: number
+  outdated: number
 }
 
 export interface SvnLogPath {

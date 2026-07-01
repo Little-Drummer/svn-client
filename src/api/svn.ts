@@ -20,6 +20,7 @@ import type {
   RemoteListEntry,
   WorkingCopyEntry,
   WorkingCopyFileEntry,
+  WorkingCopyStatusSummary,
 } from '../types/svn'
 
 export const api = {
@@ -98,6 +99,8 @@ export const api = {
   info: (path: string) => invoke<SvnInfo>('svn_get_info', { path }),
   status: (path: string, showUnversioned = true, showIgnored = false) =>
     invoke<SvnStatusEntry[]>('svn_get_status', { path, showUnversioned, showIgnored }),
+  statusSummary: (path: string) =>
+    invoke<WorkingCopyStatusSummary>('svn_get_status_summary', { path }),
   statusStream: (path: string, showUnversioned = true, showIgnored = false, requestId: string) =>
     invoke<string>('svn_get_status_stream', { path, showUnversioned, showIgnored, requestId }),
   log: (params: {

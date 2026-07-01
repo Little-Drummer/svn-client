@@ -195,6 +195,16 @@ pub struct SvnStatusEntry {
     pub commit_revision: Option<u64>,
     pub commit_author: Option<String>,
     pub commit_date: Option<String>,
+    pub repos_item: Option<String>,
+    pub repos_props: Option<String>,
+}
+
+// 工作副本侧栏使用的轻量状态统计，避免前端重复解析完整状态列表。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingCopyStatusSummary {
+    pub uncommitted: usize,
+    pub outdated: usize,
 }
 
 // svn log 单条提交

@@ -118,6 +118,7 @@ pub fn run() {
             commands::create_working_copy_folder,
             commands::svn_get_info,
             commands::svn_get_status,
+            commands::svn_get_status_summary,
             commands::svn_get_status_stream,
             commands::svn_get_log,
             commands::svn_get_diff,

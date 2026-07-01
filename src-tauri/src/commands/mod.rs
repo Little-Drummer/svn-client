@@ -6,6 +6,7 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{
     CapturePresetFile, ConfigPreset, MergeRouteConfig, PresetApplyPlan, Project, RemoteListEntry,
     RepositoryEntry, SvnInfo, SvnLogEntry, SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry,
+    WorkingCopyStatusSummary,
 };
 use crate::process::{spawn_merge_task, spawn_status_stream, spawn_svn_task, ProcessRegistry};
 use crate::storage::ConfigState;
@@ -25,7 +26,7 @@ use crate::svn::package::{
 };
 use crate::svn::project::{group_working_copies, scan_project_dir};
 use crate::svn::runner::{check_svn_version, run_svn};
-use crate::svn::status::{svn_status, svn_status_verbose_all};
+use crate::svn::status::{svn_status, svn_status_verbose_all, svn_status_with_updates};
 
 // ---------- 环境检查 ----------
 
@@ -893,6 +894,44 @@ pub async fn svn_get_status(
     tauri::async_runtime::spawn_blocking(move || svn_status(&bin, &path, show, ignored))
         .await
         .map_err(|e| AppError::Other(format!("svn status 任务失败: {e}")))?
+}
+
+#[tauri::command]
+pub async fn svn_get_status_summary(
+    state: State<'_, ConfigState>,
+    path: String,
+) -> AppResult<WorkingCopyStatusSummary> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = svn_status_with_updates(&bin, &path, true, false)?;
+        let mut uncommitted = 0;
+        let mut outdated = 0;
+        for entry in entries {
+            let local_props_changed = entry.props.as_deref().unwrap_or("none") != "none";
+            let local_changed = !matches!(entry.item.as_str(), "normal" | "ignored" | "external")
+                || local_props_changed;
+            if local_changed {
+                uncommitted += 1;
+            }
+
+            let repos_props_changed = entry.repos_props.as_deref().unwrap_or("none") != "none";
+            let repos_changed = entry
+                .repos_item
+                .as_deref()
+                .map(|item| !matches!(item, "normal" | "none"))
+                .unwrap_or(false)
+                || repos_props_changed;
+            if repos_changed {
+                outdated += 1;
+            }
+        }
+        Ok(WorkingCopyStatusSummary {
+            uncommitted,
+            outdated,
+        })
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("svn status 统计任务失败: {e}")))?
 }
 
 // 流式刷新状态，立即返回 request_id，结果通过 svn-status-stream 事件推送
