@@ -26,7 +26,6 @@ fn build_command(svn_bin: &str, args: &[&str]) -> Command {
 pub struct SvnOutput {
     pub stdout: String,
     pub stderr: String,
-    pub exit_code: Option<i32>,
 }
 
 /// 一次性执行命令，等待结束后返回输出
@@ -55,11 +54,7 @@ pub fn run_svn(svn_bin: &str, args: &[&str]) -> AppResult<SvnOutput> {
         });
     }
 
-    Ok(SvnOutput {
-        stdout,
-        stderr,
-        exit_code,
-    })
+    Ok(SvnOutput { stdout, stderr })
 }
 
 /// 检测 svn 是否可用，返回 svn --version 第一行

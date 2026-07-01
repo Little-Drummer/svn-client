@@ -55,8 +55,13 @@ pub struct MergeRouteConfig {
     pub id: String,
     pub project_name: String,
     pub name: String,
+    // 来源和目标可分别选择不同项目；旧配置为空时回退到 project_name
+    #[serde(default)]
+    pub source_project_name: String,
     pub source_env: String,
     pub source_module: String,
+    #[serde(default)]
+    pub target_project_name: String,
     pub target_env: String,
     pub target_module: String,
     #[serde(default = "default_true")]

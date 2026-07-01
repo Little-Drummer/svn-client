@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { GitMerge, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-vue-next'
+import { ArchiveRestore, GitMerge, Plus, RefreshCw, RotateCcw, Settings2, Trash2 } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -48,15 +48,28 @@ const message = ref('')
 const generating = ref(false)
 
 const taskId = ref<string | null>(null)
+const mergeTaskId = ref<string | null>(null)
+const taskAction = ref<'merge' | 'commit' | null>(null)
+const mergeReadyToCommit = ref(false)
+const commitCompleted = ref(false)
+const recovering = ref(false)
 const running = computed(() => {
   if (!taskId.value) return false
   const t = tasksStore.tasks.get(taskId.value)
   return !!t && !t.finished
 })
 const currentProject = computed(() => projects.value.find((p) => p.name === projectName.value) ?? null)
+const mergeTaskFailed = computed(() => {
+  if (!mergeTaskId.value) return false
+  const task = tasksStore.tasks.get(mergeTaskId.value)
+  return !!task?.finished && task.success === false
+})
+const mergeSessionLocked = computed(() => mergeReadyToCommit.value || mergeTaskFailed.value || commitCompleted.value)
 const routeConfigsInvalid = computed(() =>
   routeConfigs.value.some(
     (config) =>
+      !config.sourceProjectName ||
+      !config.targetProjectName ||
       !config.sourceEnv ||
       !config.sourceModule ||
       !config.targetEnv ||
@@ -64,41 +77,45 @@ const routeConfigsInvalid = computed(() =>
   ),
 )
 
-function branchOptions(selected?: string) {
-  const names = currentProject.value?.branches.map((branch) => branch.environment) ?? []
+function projectByName(name: string) {
+  return projects.value.find((project) => project.name === name) ?? null
+}
+
+function branchOptions(projectName: string, selected?: string) {
+  const names = projectByName(projectName)?.branches.map((branch) => branch.environment) ?? []
   if (selected && !names.includes(selected)) return [...names, selected]
   return names
 }
 
-function modulesForEnv(env: string) {
-  return currentProject.value?.branches.find((branch) => branch.environment === env)?.modules ?? []
+function modulesForEnv(projectName: string, env: string) {
+  return projectByName(projectName)?.branches.find((branch) => branch.environment === env)?.modules ?? []
 }
 
-function moduleOptions(env: string, selected?: string) {
-  const names = modulesForEnv(env).map((module) => module.module)
+function moduleOptions(projectName: string, env: string, selected?: string) {
+  const names = modulesForEnv(projectName, env).map((module) => module.module)
   if (selected && !names.includes(selected)) return [...names, selected]
   return names
 }
 
-function preferredBranch(name: string) {
-  return currentProject.value?.branches.find((branch) => branch.environment === name)?.environment
+function preferredBranch(projectName: string, name: string) {
+  return projectByName(projectName)?.branches.find((branch) => branch.environment === name)?.environment
 }
 
-function preferredAnyBranch(names: string[]) {
+function preferredAnyBranch(projectName: string, names: string[]) {
   for (const name of names) {
-    const found = preferredBranch(name)
+    const found = preferredBranch(projectName, name)
     if (found) return found
   }
   return null
 }
 
-function preferredModule(env: string, preferred = 'rest') {
-  const modules = modulesForEnv(env)
+function preferredModule(projectName: string, env: string, preferred = 'rest') {
+  const modules = modulesForEnv(projectName, env)
   return modules.find((module) => module.module === preferred)?.module ?? modules[0]?.module ?? ''
 }
 
 function routeConfigLabel(config: MergeRouteConfig) {
-  return `${config.sourceEnv}/${config.sourceModule} -> ${config.targetEnv}/${config.targetModule}`
+  return `${config.sourceProjectName}/${config.sourceEnv}/${config.sourceModule} -> ${config.targetProjectName}/${config.targetEnv}/${config.targetModule}`
 }
 
 function syncRouteConfigName(config: MergeRouteConfig) {
@@ -107,11 +124,23 @@ function syncRouteConfigName(config: MergeRouteConfig) {
 
 function onConfigEnvChange(config: MergeRouteConfig, side: 'source' | 'target') {
   if (side === 'source') {
-    const options = moduleOptions(config.sourceEnv)
-    if (!options.includes(config.sourceModule)) config.sourceModule = preferredModule(config.sourceEnv)
+    const options = moduleOptions(config.sourceProjectName, config.sourceEnv)
+    if (!options.includes(config.sourceModule)) config.sourceModule = preferredModule(config.sourceProjectName, config.sourceEnv)
   } else {
-    const options = moduleOptions(config.targetEnv)
-    if (!options.includes(config.targetModule)) config.targetModule = preferredModule(config.targetEnv)
+    const options = moduleOptions(config.targetProjectName, config.targetEnv)
+    if (!options.includes(config.targetModule)) config.targetModule = preferredModule(config.targetProjectName, config.targetEnv)
+  }
+  syncRouteConfigName(config)
+}
+
+// 切换端点项目后重置为该项目实际存在的分支和模块
+function onConfigProjectChange(config: MergeRouteConfig, side: 'source' | 'target') {
+  if (side === 'source') {
+    config.sourceEnv = branchOptions(config.sourceProjectName)[0] ?? ''
+    config.sourceModule = preferredModule(config.sourceProjectName, config.sourceEnv)
+  } else {
+    config.targetEnv = branchOptions(config.targetProjectName)[0] ?? ''
+    config.targetModule = preferredModule(config.targetProjectName, config.targetEnv)
   }
   syncRouteConfigName(config)
 }
@@ -119,7 +148,8 @@ function onConfigEnvChange(config: MergeRouteConfig, side: 'source' | 'target') 
 function hasConfigEndpoint(config: MergeRouteConfig, side: 'source' | 'target') {
   const env = side === 'source' ? config.sourceEnv : config.targetEnv
   const module = side === 'source' ? config.sourceModule : config.targetModule
-  return modulesForEnv(env).some((item) => item.module === module)
+  const endpointProject = side === 'source' ? config.sourceProjectName : config.targetProjectName
+  return modulesForEnv(endpointProject, env).some((item) => item.module === module)
 }
 
 function configAvailable(config: MergeRouteConfig) {
@@ -128,19 +158,21 @@ function configAvailable(config: MergeRouteConfig) {
 
 function createRouteConfig(): MergeRouteConfig {
   const sourceEnv =
-    preferredAnyBranch(['produce', 'pro']) ?? currentProject.value?.branches[0]?.environment ?? ''
+    preferredAnyBranch(projectName.value, ['produce', 'pro']) ?? currentProject.value?.branches[0]?.environment ?? ''
   const targetEnv =
-    preferredBranch('1.0bugfix') ??
+    preferredBranch(projectName.value, '1.0bugfix') ??
     currentProject.value?.branches.find((branch) => branch.environment !== sourceEnv)?.environment ??
     sourceEnv
   const config: MergeRouteConfig = {
     id: crypto.randomUUID(),
     projectName: projectName.value,
     name: '',
+    sourceProjectName: projectName.value,
     sourceEnv,
-    sourceModule: preferredModule(sourceEnv),
+    sourceModule: preferredModule(projectName.value, sourceEnv),
+    targetProjectName: projectName.value,
     targetEnv,
-    targetModule: preferredModule(targetEnv),
+    targetModule: preferredModule(projectName.value, targetEnv),
     enabled: true,
   }
   syncRouteConfigName(config)
@@ -232,15 +264,43 @@ onMounted(async () => {
   await loadProjects()
 })
 
-// 合并成功后自动刷新版本列表
+const handledTaskIds = new Set<string>()
+
+// 合并成功后停在待提交阶段；提交成功后恢复合并前的搁置内容
 watch(
-  () => taskId.value ? tasksStore.tasks.get(taskId.value) : null,
-  (t) => {
-    if (t?.finished && t.success && route.value) {
-      fetchRevisions()
+  () => tasksStore.completedTask,
+  async (completed) => {
+    if (
+      !completed ||
+      completed.taskId !== taskId.value ||
+      !completed.success ||
+      !route.value ||
+      handledTaskIds.has(completed.taskId)
+    ) return
+    handledTaskIds.add(completed.taskId)
+    if (taskAction.value === 'merge') mergeReadyToCommit.value = true
+    if (taskAction.value === 'commit') {
+      commitCompleted.value = true
+      await restoreShelfAfterCommit()
     }
   },
 )
+
+async function restoreShelfAfterCommit() {
+  if (!route.value || !mergeTaskId.value) return
+  recovering.value = true
+  try {
+    await api.mergeRestoreShelf(mergeTaskId.value, route.value.targetPath)
+    mergeReadyToCommit.value = false
+    commitCompleted.value = false
+    mergeTaskId.value = null
+    await fetchRevisions()
+  } catch (e) {
+    toast(e, '提交成功，但恢复搁置文件失败，请重试恢复')
+  } finally {
+    recovering.value = false
+  }
+}
 
 async function loadProjects() {
   try {
@@ -258,7 +318,7 @@ async function loadProjects() {
 watch(
   () => props.activeProjectName,
   (name) => {
-    if (name && projects.value.some((p) => p.name === name) && name !== projectName.value) {
+    if (!mergeSessionLocked.value && name && projects.value.some((p) => p.name === name) && name !== projectName.value) {
       projectName.value = name
       onProjectChange()
     }
@@ -270,6 +330,10 @@ async function onProjectChange() {
   route.value = null
   routes.value = []
   taskId.value = null
+  mergeTaskId.value = null
+  taskAction.value = null
+  mergeReadyToCommit.value = false
+  commitCompleted.value = false
   resetRevisions()
   if (!projectName.value) return
   loadingRoutes.value = true
@@ -289,12 +353,16 @@ function resetRevisions() {
   fetched.value = false
   preview.value = null
   message.value = ''
+  mergeReadyToCommit.value = false
+  commitCompleted.value = false
 }
 
 function selectRoute(r: MergeRoute) {
-  if (running.value) return
+  if (running.value || mergeSessionLocked.value) return
   route.value = r
   taskId.value = null
+  mergeTaskId.value = null
+  taskAction.value = null
   resetRevisions()
 }
 
@@ -349,20 +417,20 @@ async function generatePreview() {
   }
 }
 
-async function execute() {
+async function executeMerge() {
   if (!route.value || selected.value.size === 0 || !message.value.trim()) return
   const ok = await confirm({
     title: '执行合并',
-    content: `合并方向：${route.value.name}\n\n将对目标工作副本执行 update → merge → commit${
-      route.value.syncBranch ? '（必要时先搁置本地修改并在提交后恢复）' : ''
-    }。共 ${selected.value.size} 个版本。确认执行？`,
+    content: `合并方向：${route.value.name}\n\n目标工作副本如有修改将先自动搁置，再执行 update → merge，不会自动提交。共 ${selected.value.size} 个版本。确认执行？`,
     confirmText: '执行合并',
     destructive: true,
   })
   if (!ok) return
   try {
     const revs = [...selected.value].sort((a, b) => a - b)
-    taskId.value = await api.mergeExecute(route.value, revs, message.value)
+    taskId.value = await api.mergeExecute(route.value, revs)
+    mergeTaskId.value = taskId.value
+    taskAction.value = 'merge'
     tasksStore.register({
       taskId: taskId.value,
       kind: 'merge',
@@ -371,6 +439,78 @@ async function execute() {
     })
   } catch (e) {
     toast(e, '启动合并失败')
+  }
+}
+
+async function commitMerge() {
+  if (!route.value || !mergeReadyToCommit.value || commitCompleted.value || !message.value.trim()) return
+  const ok = await confirm({
+    title: '提交合并结果',
+    content: `将提交目标工作副本：${route.value.targetPath}\n\n请确认已检查合并结果和冲突。`,
+    confirmText: '提交',
+    destructive: true,
+  })
+  if (!ok) return
+  try {
+    taskId.value = await api.startCommit([route.value.targetPath], message.value)
+    taskAction.value = 'commit'
+    tasksStore.register({
+      taskId: taskId.value,
+      kind: 'commit',
+      title: `提交合并 ${route.value.name}`,
+      command: `svn commit ${route.value.targetPath}`,
+    })
+  } catch (e) {
+    toast(e, '启动提交失败')
+  }
+}
+
+// 保留合并结果，直接恢复合并前的本地修改，并退出当前提交流程
+async function restoreShelfWithoutCommit() {
+  if (!route.value || !mergeTaskId.value || !mergeReadyToCommit.value || recovering.value) return
+  const ok = await confirm({
+    title: '不提交并恢复搁置',
+    content: `不会提交或撤销本次合并，将直接恢复合并前搁置的文件。恢复后，合并结果与原本地修改会同时保留在目标工作副本中。\n\n目标：${route.value.targetPath}`,
+    confirmText: '直接恢复',
+    destructive: true,
+  })
+  if (!ok) return
+  recovering.value = true
+  try {
+    await api.mergeRestoreShelf(mergeTaskId.value, route.value.targetPath)
+    mergeTaskId.value = null
+    taskAction.value = null
+    resetRevisions()
+  } catch (e) {
+    toast(e, '恢复搁置文件失败')
+  } finally {
+    recovering.value = false
+  }
+}
+
+// 撤销合并现场后再恢复原修改，避免把两部分改动混在一起
+async function rollbackAndRestore() {
+  if (!route.value || !mergeTaskId.value || recovering.value) return
+  const ok = await confirm({
+    title: '撤销合并并恢复搁置',
+    content: `将还原本次合并在目标工作副本产生的全部修改，然后恢复合并前自动搁置的文件。\n\n目标：${route.value.targetPath}`,
+    confirmText: '确认撤销并恢复',
+    destructive: true,
+  })
+  if (!ok) return
+  recovering.value = true
+  try {
+    await api.mergeRollback(mergeTaskId.value, route.value.targetPath)
+    taskId.value = null
+    mergeTaskId.value = null
+    taskAction.value = null
+    mergeReadyToCommit.value = false
+    commitCompleted.value = false
+    await fetchRevisions()
+  } catch (e) {
+    toast(e, '撤销合并或恢复搁置文件失败')
+  } finally {
+    recovering.value = false
   }
 }
 </script>
@@ -384,7 +524,7 @@ async function execute() {
         <select
           v-model="projectName"
           class="ui-select"
-          :disabled="running"
+          :disabled="running || mergeSessionLocked"
           @change="onProjectChange"
         >
           <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}</option>
@@ -393,7 +533,7 @@ async function execute() {
           size="xs"
           variant="ghost"
           class="route-settings-btn"
-          :disabled="running || !projectName"
+          :disabled="running || mergeSessionLocked || !projectName"
           @click="openRouteConfig"
         >
           <Settings2 class="settings-icon" />
@@ -415,7 +555,7 @@ async function execute() {
             :key="r.id"
             type="button"
             :class="['route-chip', { active: route?.id === r.id }]"
-            :disabled="running"
+            :disabled="running || mergeSessionLocked"
             @click="selectRoute(r)"
           >
             <GitMerge class="chip-icon" />
@@ -428,7 +568,7 @@ async function execute() {
     <!-- 版本选择 -->
     <div v-if="route" class="revisions-block">
       <div class="rev-toolbar">
-        <Button size="xs" :disabled="loadingRevisions || running" @click="fetchRevisions">
+        <Button size="xs" :disabled="loadingRevisions || running || mergeSessionLocked" @click="fetchRevisions">
           <RefreshCw class="icon-xs" :class="{ spin: loadingRevisions }" />
           {{ fetched ? '重新拉取' : '拉取可合并版本' }}
         </Button>
@@ -441,13 +581,13 @@ async function execute() {
         <span class="spacer" />
         <template v-if="fetched && revisions.length">
           <Badge variant="secondary">已选 {{ selectedCount }}</Badge>
-          <Button size="xs" variant="ghost" @click="selectAllVisible">全选</Button>
-          <Button size="xs" variant="ghost" @click="clearSelection">清空</Button>
+          <Button size="xs" variant="ghost" :disabled="running || mergeSessionLocked" @click="selectAllVisible">全选</Button>
+          <Button size="xs" variant="ghost" :disabled="running || mergeSessionLocked" @click="clearSelection">清空</Button>
         </template>
         <Button
           v-if="selectedCount > 0"
           size="xs"
-          :disabled="generating"
+          :disabled="generating || running || mergeSessionLocked"
           @click="generatePreview"
         >
           {{ generating ? '生成中…' : '生成合并日志' }}
@@ -469,6 +609,7 @@ async function execute() {
           >
             <Checkbox
               :model-value="selected.has(r.revision)"
+              :disabled="running || mergeSessionLocked"
               @update:model-value="(v: boolean | 'indeterminate') => toggleRev(r.revision, v)"
             />
             <div class="rev-meta">
@@ -496,8 +637,47 @@ async function execute() {
         placeholder="合并日志（可编辑）"
       />
       <div class="exec-actions">
-        <Button :disabled="running || !message.trim()" @click="execute">
-          {{ running ? '合并中…' : '执行合并' }}
+        <Badge v-if="commitCompleted" variant="secondary">提交完成，待恢复搁置文件</Badge>
+        <Badge v-else-if="mergeReadyToCommit" variant="secondary">合并完成，待检查并提交</Badge>
+        <Button
+          v-if="mergeReadyToCommit && !commitCompleted"
+          variant="ghost"
+          :disabled="running || recovering"
+          @click="rollbackAndRestore"
+        >
+          <RotateCcw class="icon-xs" />
+          撤销合并并恢复搁置
+        </Button>
+        <Button
+          v-if="mergeReadyToCommit && !commitCompleted"
+          variant="secondary"
+          :disabled="running || recovering"
+          @click="restoreShelfWithoutCommit"
+        >
+          <ArchiveRestore class="icon-xs" />
+          {{ recovering ? '恢复中…' : '不提交，恢复搁置' }}
+        </Button>
+        <Button
+          v-if="commitCompleted"
+          variant="secondary"
+          :disabled="recovering"
+          @click="restoreShelfAfterCommit"
+        >
+          <ArchiveRestore class="icon-xs" />
+          {{ recovering ? '恢复中…' : '恢复搁置文件' }}
+        </Button>
+        <Button
+          :disabled="running || mergeReadyToCommit || !message.trim()"
+          @click="executeMerge"
+        >
+          {{ running && taskAction === 'merge' ? '合并中…' : '执行合并' }}
+        </Button>
+        <Button
+          variant="default"
+          :disabled="running || !mergeReadyToCommit || commitCompleted || !message.trim()"
+          @click="commitMerge"
+        >
+          {{ running && taskAction === 'commit' ? '提交中…' : '提交合并结果' }}
         </Button>
       </div>
     </div>
@@ -509,6 +689,15 @@ async function execute() {
       @retried="taskId = $event"
       @close="taskId = null"
     />
+
+    <div v-if="mergeTaskFailed && route" class="merge-recovery-bar">
+      <Badge variant="destructive">合并失败或存在冲突</Badge>
+      <span>可撤销本次合并现场，并恢复合并前自动搁置的文件。</span>
+      <Button size="xs" variant="secondary" :disabled="recovering" @click="rollbackAndRestore">
+        <RotateCcw class="icon-xs" />
+        {{ recovering ? '恢复中…' : '撤销合并并恢复搁置' }}
+      </Button>
+    </div>
 
     <Dialog v-model:open="routeConfigOpen">
       <DialogContent class="route-config-dialog">
@@ -562,6 +751,18 @@ async function execute() {
 
               <div class="route-config-grid">
                 <label class="route-field">
+                  <span>来源项目</span>
+                  <select
+                    v-model="config.sourceProjectName"
+                    class="ui-select"
+                    @change="onConfigProjectChange(config, 'source')"
+                  >
+                    <option v-for="project in projects" :key="`source-project-${config.id}-${project.name}`" :value="project.name">
+                      {{ project.name }}
+                    </option>
+                  </select>
+                </label>
+                <label class="route-field">
                   <span>来源分支</span>
                   <select
                     v-model="config.sourceEnv"
@@ -569,7 +770,7 @@ async function execute() {
                     @change="onConfigEnvChange(config, 'source')"
                   >
                     <option
-                      v-for="env in branchOptions(config.sourceEnv)"
+                      v-for="env in branchOptions(config.sourceProjectName, config.sourceEnv)"
                       :key="`source-env-${config.id}-${env}`"
                       :value="env"
                     >
@@ -585,11 +786,23 @@ async function execute() {
                     @change="syncRouteConfigName(config)"
                   >
                     <option
-                      v-for="module in moduleOptions(config.sourceEnv, config.sourceModule)"
+                      v-for="module in moduleOptions(config.sourceProjectName, config.sourceEnv, config.sourceModule)"
                       :key="`source-module-${config.id}-${module}`"
                       :value="module"
                     >
                       {{ module }}
+                    </option>
+                  </select>
+                </label>
+                <label class="route-field">
+                  <span>目标项目</span>
+                  <select
+                    v-model="config.targetProjectName"
+                    class="ui-select"
+                    @change="onConfigProjectChange(config, 'target')"
+                  >
+                    <option v-for="project in projects" :key="`target-project-${config.id}-${project.name}`" :value="project.name">
+                      {{ project.name }}
                     </option>
                   </select>
                 </label>
@@ -601,7 +814,7 @@ async function execute() {
                     @change="onConfigEnvChange(config, 'target')"
                   >
                     <option
-                      v-for="env in branchOptions(config.targetEnv)"
+                      v-for="env in branchOptions(config.targetProjectName, config.targetEnv)"
                       :key="`target-env-${config.id}-${env}`"
                       :value="env"
                     >
@@ -617,7 +830,7 @@ async function execute() {
                     @change="syncRouteConfigName(config)"
                   >
                     <option
-                      v-for="module in moduleOptions(config.targetEnv, config.targetModule)"
+                      v-for="module in moduleOptions(config.targetProjectName, config.targetEnv, config.targetModule)"
                       :key="`target-module-${config.id}-${module}`"
                       :value="module"
                     >
@@ -864,7 +1077,7 @@ async function execute() {
 }
 .route-config-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
   gap: 8px;
 }
 .route-field {
@@ -1007,7 +1220,22 @@ async function execute() {
 }
 .exec-actions {
   display: flex;
+  align-items: center;
+  gap: 8px;
   justify-content: flex-end;
+}
+.merge-recovery-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: var(--hairline) solid color-mix(in srgb, var(--danger, #d1242f) 28%, var(--stroke-soft));
+  color: var(--danger, #d1242f);
+  background: color-mix(in srgb, var(--danger, #d1242f) 7%, var(--mat-content));
+  font-size: var(--fs-callout);
+}
+.merge-recovery-bar > span:nth-child(2) {
+  flex: 1;
 }
 .icon-xs {
   width: 13px;

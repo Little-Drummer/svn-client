@@ -28,9 +28,6 @@ pub enum AppError {
     #[error("路径不是 SVN 工作副本: {0}")]
     NotWorkingCopy(String),
 
-    #[error("任务不存在: {0}")]
-    TaskNotFound(String),
-
     #[error("{0}")]
     Other(String),
 }
@@ -60,9 +57,6 @@ pub enum AppErrorPayload {
         message: String,
     },
     NotWorkingCopy {
-        message: String,
-    },
-    TaskNotFound {
         message: String,
     },
     Other {
@@ -95,7 +89,6 @@ impl serde::Serialize for AppError {
             },
             AppError::InvalidPath(m) => AppErrorPayload::InvalidPath { message: m.clone() },
             AppError::NotWorkingCopy(m) => AppErrorPayload::NotWorkingCopy { message: m.clone() },
-            AppError::TaskNotFound(m) => AppErrorPayload::TaskNotFound { message: m.clone() },
             AppError::Other(m) => AppErrorPayload::Other { message: m.clone() },
         };
         payload.serialize(serializer)

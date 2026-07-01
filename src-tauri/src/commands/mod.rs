@@ -17,8 +17,8 @@ use crate::svn::list::{
 };
 use crate::svn::log::{svn_log, LogOptions};
 use crate::svn::merge::{
-    build_configured_routes, build_preview, build_routes, fetch_revisions, MergePreview,
-    MergeRevision, MergeRoute,
+    build_configured_routes, build_preview, build_routes, fetch_revisions, restore_merge_shelf,
+    rollback_merge, MergePreview, MergeRevision, MergeRoute,
 };
 use crate::svn::package::{
     commit_version, fetch_package_revisions, package_zip, run_package_build, PackageBuildResult,
@@ -213,9 +213,14 @@ pub fn add_working_copy(state: State<ConfigState>, path: String) -> AppResult<Wo
     if path.trim().is_empty() {
         return Err(AppError::InvalidPath(path));
     }
+    // 持久化绝对规范路径，避免运行目录不同导致同一工作副本无法定位。
+    let normalized_path = std::fs::canonicalize(path.trim())
+        .map_err(|_| AppError::InvalidPath(path.clone()))?
+        .to_string_lossy()
+        .into_owned();
     let bin = state.svn_bin();
     // 校验是 svn working copy
-    let info = svn_info(&bin, &path).map_err(|e| match e {
+    let info = svn_info(&bin, &normalized_path).map_err(|e| match e {
         AppError::SvnCommand { stderr, .. }
             if stderr.to_lowercase().contains("not a working copy") =>
         {
@@ -223,11 +228,11 @@ pub fn add_working_copy(state: State<ConfigState>, path: String) -> AppResult<Wo
         }
         other => other,
     })?;
-    let display_revision = working_copy_display_revision(&bin, &path, info.revision);
+    let display_revision = working_copy_display_revision(&bin, &normalized_path, info.revision);
 
     let entry = WorkingCopyEntry {
         id: Uuid::new_v4().to_string(),
-        path: info.path.clone(),
+        path: normalized_path,
         url: Some(info.url),
         repository_root: Some(info.repository_root),
         revision: Some(display_revision),
@@ -372,7 +377,9 @@ pub fn scan_and_add_project(
         return Err(AppError::InvalidPath(path));
     }
     let bin = state.svn_bin();
-    let root = std::path::PathBuf::from(path.trim());
+    // 扫描入口先转为绝对规范路径，后续候选目录和持久化结果均不依赖进程工作目录。
+    let root =
+        std::fs::canonicalize(path.trim()).map_err(|_| AppError::InvalidPath(path.clone()))?;
     let candidates = scan_project_dir(&root)?;
 
     // 先在锁外把每个候选目录的 svn 元信息取齐，避免持锁期间执行子进程
@@ -382,7 +389,7 @@ pub fn scan_and_add_project(
         // 个别子目录不是有效工作副本时跳过，不影响其余识别结果
         if let Ok(info) = svn_info(&bin, &p) {
             let display_revision = working_copy_display_revision(&bin, &p, info.revision);
-            infos.push((info, display_revision));
+            infos.push((info, display_revision, p));
         }
     }
 
@@ -393,11 +400,11 @@ pub fn scan_and_add_project(
             .config
             .lock()
             .map_err(|_| AppError::Other("config 锁被污染".into()))?;
-        for (info, display_revision) in infos {
+        for (info, display_revision, absolute_path) in infos {
             if let Some(existing) = cfg
                 .working_copies
                 .iter_mut()
-                .find(|wc| wc.path == info.path)
+                .find(|wc| wc.path == absolute_path)
             {
                 existing.url = Some(info.url);
                 existing.repository_root = Some(info.repository_root);
@@ -409,7 +416,7 @@ pub fn scan_and_add_project(
             } else {
                 let entry = WorkingCopyEntry {
                     id: Uuid::new_v4().to_string(),
-                    path: info.path,
+                    path: absolute_path,
                     url: Some(info.url),
                     repository_root: Some(info.repository_root),
                     revision: Some(display_revision),
@@ -434,6 +441,14 @@ fn normalize_merge_route_config(
     mut config: MergeRouteConfig,
 ) -> AppResult<MergeRouteConfig> {
     config.project_name = project_name.trim().to_string();
+    config.source_project_name = config.source_project_name.trim().to_string();
+    config.target_project_name = config.target_project_name.trim().to_string();
+    if config.source_project_name.is_empty() {
+        config.source_project_name = config.project_name.clone();
+    }
+    if config.target_project_name.is_empty() {
+        config.target_project_name = config.project_name.clone();
+    }
     config.source_env = config.source_env.trim().to_string();
     config.source_module = config.source_module.trim().to_string();
     config.target_env = config.target_env.trim().to_string();
@@ -451,8 +466,13 @@ fn normalize_merge_route_config(
     }
     if config.name.is_empty() {
         config.name = format!(
-            "{}/{} -> {}/{}",
-            config.source_env, config.source_module, config.target_env, config.target_module
+            "{}/{}/{} -> {}/{}/{}",
+            config.source_project_name,
+            config.source_env,
+            config.source_module,
+            config.target_project_name,
+            config.target_env,
+            config.target_module
         );
     }
     Ok(config)
@@ -468,12 +488,23 @@ pub fn merge_get_route_configs(
         .config
         .lock()
         .map_err(|_| AppError::Other("config 锁被污染".into()))?;
-    Ok(cfg
+    let configs = cfg
         .merge_route_configs
         .iter()
         .filter(|config| config.project_name == project_name)
         .cloned()
-        .collect())
+        .map(|mut config| {
+            // 读取旧配置时补齐端点项目，保存后会持久化为新结构
+            if config.source_project_name.is_empty() {
+                config.source_project_name = config.project_name.clone();
+            }
+            if config.target_project_name.is_empty() {
+                config.target_project_name = config.project_name.clone();
+            }
+            config
+        })
+        .collect();
+    Ok(configs)
 }
 
 #[tauri::command]
@@ -520,7 +551,11 @@ pub fn merge_list_routes(
         .find(|p| p.name == project_name)
         .ok_or_else(|| AppError::Other(format!("找不到项目 {project_name}")))?;
     let mut routes = build_routes(project);
-    routes.extend(build_configured_routes(project, &cfg.merge_route_configs));
+    routes.extend(build_configured_routes(
+        project,
+        &projects,
+        &cfg.merge_route_configs,
+    ));
     Ok(routes)
 }
 
@@ -550,14 +585,13 @@ pub async fn merge_preview(
         .map_err(|e| AppError::Other(format!("生成合并预览任务失败: {e}")))
 }
 
-/// 执行合并：（可选搁置）→ update → merge → 有变更才 commit →（恢复搁置），流式推送进度。
+/// 自动搁置目标已有修改，再执行 update → merge；提交由用户另行确认。
 #[tauri::command]
 pub fn merge_execute(
     app: AppHandle,
     state: State<ConfigState>,
     route: MergeRoute,
     revisions: Vec<u64>,
-    message: String,
 ) -> AppResult<String> {
     if revisions.is_empty() {
         return Err(AppError::Other("没有选择任何版本".into()));
@@ -566,9 +600,41 @@ pub fn merge_execute(
     let shelves_dir = state
         .config_path
         .parent()
-        .map(|p| p.join("shelves"))
-        .ok_or_else(|| AppError::Other("无法定位配置目录".into()))?;
-    spawn_merge_task(app, bin, route, revisions, message, shelves_dir)
+        .map(|path| path.join("shelves"))
+        .ok_or_else(|| AppError::Other("无法定位搁置目录".into()))?;
+    spawn_merge_task(app, bin, route, revisions, shelves_dir)
+}
+
+/// 撤销指定合并会话产生的修改，并恢复该会话自动搁置的文件。
+#[tauri::command]
+pub fn merge_rollback(
+    state: State<ConfigState>,
+    task_id: String,
+    target_path: String,
+) -> AppResult<bool> {
+    let bin = state.svn_bin();
+    let shelves_dir = state
+        .config_path
+        .parent()
+        .map(|path| path.join("shelves"))
+        .ok_or_else(|| AppError::Other("无法定位搁置目录".into()))?;
+    rollback_merge(&bin, target_path.trim(), &shelves_dir, task_id.trim())
+}
+
+/// 提交完成后恢复合并前自动搁置的文件。
+#[tauri::command]
+pub fn merge_restore_shelf(
+    state: State<ConfigState>,
+    task_id: String,
+    target_path: String,
+) -> AppResult<bool> {
+    let bin = state.svn_bin();
+    let shelves_dir = state
+        .config_path
+        .parent()
+        .map(|path| path.join("shelves"))
+        .ok_or_else(|| AppError::Other("无法定位搁置目录".into()))?;
+    restore_merge_shelf(&bin, target_path.trim(), &shelves_dir, task_id.trim())
 }
 
 // ---------- 本地开发配置预设 ----------

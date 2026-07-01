@@ -19,15 +19,6 @@ export interface WorkingCopyTreeSegment {
 
 const LOCAL_WORK_ROOT = 'work'
 const ENV_FOLDERS = new Set(['develop', 'test', 'produce'])
-const MODULE_FOLDERS = new Set([
-  'front',
-  'rest',
-  'database',
-  'updatesql',
-  'xxl-job-admin',
-  'doc-archive',
-  'ai-appraisal',
-])
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

@@ -242,14 +242,13 @@ pub fn spawn_svn_task(
     Ok(task_id)
 }
 
-/// 启动一个合并长任务（update→merge→commit + 可选搁置/恢复），立即返回 task_id。
+/// 启动一个合并长任务（update→merge），立即返回 task_id；提交由独立任务完成。
 /// 过程输出复用 svn-task 事件，前端用现有 TaskOutput 组件展示。
 pub fn spawn_merge_task(
     app: AppHandle,
     svn_bin: String,
     route: MergeRoute,
     revisions: Vec<u64>,
-    message: String,
     shelves_dir: PathBuf,
 ) -> AppResult<String> {
     let task_id = Uuid::new_v4().to_string();
@@ -270,8 +269,8 @@ pub fn spawn_merge_task(
             &svn_bin,
             &route,
             &revisions,
-            &message,
             &shelves_dir,
+            &tid,
             |line| {
                 let event = match line {
                     StreamLine::Stdout(s) => TaskEvent::Stdout {

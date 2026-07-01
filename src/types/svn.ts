@@ -47,8 +47,10 @@ export interface MergeRouteConfig {
   id: string
   projectName: string
   name: string
+  sourceProjectName: string
   sourceEnv: string
   sourceModule: string
+  targetProjectName: string
   targetEnv: string
   targetModule: string
   enabled: boolean
@@ -274,5 +276,4 @@ export type AppErrorPayload =
   | { kind: 'json'; message: string }
   | { kind: 'invalid_path'; message: string }
   | { kind: 'not_working_copy'; message: string }
-  | { kind: 'task_not_found'; message: string }
   | { kind: 'other'; message: string }

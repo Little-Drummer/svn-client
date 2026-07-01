@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-
 use serde::{Deserialize, Serialize};
 
 use crate::errors::AppResult;
@@ -183,23 +182,58 @@ pub fn build_routes(project: &Project) -> Vec<MergeRoute> {
     routes
 }
 
-pub fn build_configured_routes(project: &Project, configs: &[MergeRouteConfig]) -> Vec<MergeRoute> {
+pub fn build_configured_routes(
+    owner_project: &Project,
+    projects: &[Project],
+    configs: &[MergeRouteConfig],
+) -> Vec<MergeRoute> {
     let mut routes = Vec::new();
     for config in configs {
-        if !config.enabled || config.project_name != project.name {
+        if !config.enabled || config.project_name != owner_project.name {
             continue;
         }
-        let Some(source) = find_module(project, &config.source_env, &config.source_module) else {
+        // 兼容升级前只记录 project_name 的同项目配置
+        let source_project_name = if config.source_project_name.is_empty() {
+            &config.project_name
+        } else {
+            &config.source_project_name
+        };
+        let target_project_name = if config.target_project_name.is_empty() {
+            &config.project_name
+        } else {
+            &config.target_project_name
+        };
+        let Some(source_project) = projects
+            .iter()
+            .find(|p| p.name == source_project_name.as_str())
+        else {
             continue;
         };
-        let Some(target) = find_module(project, &config.target_env, &config.target_module) else {
+        let Some(target_project) = projects
+            .iter()
+            .find(|p| p.name == target_project_name.as_str())
+        else {
+            continue;
+        };
+        let Some(source) = find_module(source_project, &config.source_env, &config.source_module)
+        else {
+            continue;
+        };
+        let Some(target) = find_module(target_project, &config.target_env, &config.target_module)
+        else {
             continue;
         };
         if source.path == target.path {
             continue;
         }
-        let source_label = format!("{}/{}", config.source_env, config.source_module);
-        let target_label = format!("{}/{}", config.target_env, config.target_module);
+        let source_label = format!(
+            "{}/{}/{}",
+            source_project_name, config.source_env, config.source_module
+        );
+        let target_label = format!(
+            "{}/{}/{}",
+            target_project_name, config.target_env, config.target_module
+        );
         let name = if config.name.trim().is_empty() {
             format!("{source_label} -> {target_label}")
         } else {
@@ -509,108 +543,166 @@ fn info(on_line: &mut impl FnMut(StreamLine), msg: impl Into<String>) {
     on_line(StreamLine::Stdout(msg.into()));
 }
 
-// 把目标工作副本的版本化修改搁置到 shelves_dir，返回搁置目录（无修改返回 None）
-fn shelve_target(
-    svn_bin: &str,
-    route: &MergeRoute,
-    shelves_dir: &Path,
-    on_line: &mut impl FnMut(StreamLine),
-) -> Result<Option<PathBuf>, String> {
-    let target = &route.target_path;
-    let status = wc_status_text(svn_bin, target);
-    if status.is_empty() || !has_versioned_changes(&status) {
-        info(on_line, "目标工作副本没有需要搁置的修改。");
-        return Ok(None);
+fn merge_shelf_dir(shelves_dir: &Path, session_id: &str) -> AppResult<PathBuf> {
+    // 会话编号由后端 UUID 生成，这里继续限制字符，避免目录穿越
+    if session_id.is_empty()
+        || !session_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    {
+        return Err(crate::errors::AppError::Other("无效的合并会话编号".into()));
     }
-
-    let branch = route.personal_branch.clone().unwrap_or_else(|| {
-        Path::new(target)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("target")
-            .to_string()
-    });
-    let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
-    let shelf_dir = shelves_dir.join(format!("{branch}-{timestamp}"));
-    fs::create_dir_all(&shelf_dir).map_err(|e| format!("创建搁置目录失败：{e}"))?;
-
-    fs::write(shelf_dir.join("status.txt"), format!("{status}\n"))
-        .map_err(|e| format!("写入状态文件失败：{e}"))?;
-
-    let diff = run_svn(svn_bin, &["diff", target]).map_err(|e| format!("生成搁置补丁失败：{e}"))?;
-    fs::write(
-        shelf_dir.join("changes.patch"),
-        format!("{}\n", diff.stdout),
-    )
-    .map_err(|e| format!("写入补丁失败：{e}"))?;
-
-    info(on_line, format!("已生成搁置补丁：{}", shelf_dir.display()));
-    if !run_step(svn_bin, &["revert", "-R", target], on_line) {
-        return Err("清理工作副本（svn revert）失败".into());
-    }
-    Ok(Some(shelf_dir))
+    Ok(shelves_dir.join(session_id))
 }
 
-fn restore_shelf(
+// 将目标工作副本的版本化修改保存为补丁，并清理工作副本供合并使用
+fn shelve_target(
     svn_bin: &str,
     target: &str,
     shelf_dir: &Path,
     on_line: &mut impl FnMut(StreamLine),
-) {
-    let patch = shelf_dir.join("changes.patch");
-    if !patch.exists() {
-        on_line(StreamLine::Stderr(format!(
-            "未找到搁置补丁：{}",
-            patch.display()
-        )));
-        return;
+) -> Result<bool, String> {
+    fs::create_dir_all(shelf_dir).map_err(|e| format!("创建搁置目录失败：{e}"))?;
+    fs::write(shelf_dir.join("target.txt"), target)
+        .map_err(|e| format!("记录搁置目标失败：{e}"))?;
+    let status = wc_status_text(svn_bin, target);
+    if !has_versioned_changes(&status) {
+        info(on_line, "目标工作副本没有需要搁置的版本化修改。");
+        return Ok(false);
     }
-    let patch_str = patch.to_string_lossy().to_string();
-    if run_step(svn_bin, &["patch", &patch_str, target], on_line) {
-        info(on_line, "已恢复搁置的本地修改。");
-    } else {
-        on_line(StreamLine::Stderr("恢复搁置补丁失败，请手动处理。".into()));
+
+    fs::write(shelf_dir.join("status.txt"), format!("{status}\n"))
+        .map_err(|e| format!("写入搁置状态失败：{e}"))?;
+    let diff = run_svn(svn_bin, &["diff", target])
+        .map_err(|e| format!("生成搁置补丁失败：{e}"))?;
+    // 二进制修改无法由 svn diff 完整保存，禁止继续清理以避免本地内容丢失
+    if diff.stdout.contains("Cannot display: file marked as a binary type") {
+        return Err("目标工作副本包含二进制修改，无法安全自动搁置，请先单独处理".into());
     }
+    if diff.stdout.trim().is_empty() {
+        return Err("未能生成有效搁置补丁，已保留目标工作副本原修改".into());
+    }
+    fs::write(shelf_dir.join("changes.patch"), diff.stdout)
+        .map_err(|e| format!("写入搁置补丁失败：{e}"))?;
+
+    info(on_line, format!("已搁置目标工作副本修改：{}", shelf_dir.display()));
+    if !run_step(svn_bin, &["revert", "-R", target], on_line) {
+        return Err("清理目标工作副本失败，搁置补丁已保留".into());
+    }
+    Ok(true)
 }
 
-/// 完整合并流程：（可选搁置）→ update → merge → 有变更才 commit →（恢复搁置）。
-/// 每一步的输出通过 on_line 流式回传。返回整体是否成功。
+/// 恢复指定合并会话的搁置补丁；没有搁置内容时返回 false。
+pub fn restore_merge_shelf(
+    svn_bin: &str,
+    target: &str,
+    shelves_dir: &Path,
+    session_id: &str,
+) -> AppResult<bool> {
+    let shelf_dir = merge_shelf_dir(shelves_dir, session_id)?;
+    let patch = shelf_dir.join("changes.patch");
+    if !patch.exists() {
+        return Ok(false);
+    }
+    let recorded_target = fs::read_to_string(shelf_dir.join("target.txt"))?;
+    if recorded_target != target {
+        return Err(crate::errors::AppError::Other(
+            "搁置记录与目标工作副本不匹配".into(),
+        ));
+    }
+    let patch_text = patch.to_string_lossy().to_string();
+    run_svn(svn_bin, &["patch", &patch_text, target])?;
+    // 保留已恢复补丁作为兜底，同时避免重复应用
+    fs::rename(&patch, shelf_dir.join("changes.patch.restored"))?;
+    Ok(true)
+}
+
+/// 撤销当前目标工作副本中的合并结果，然后恢复合并前搁置的修改。
+pub fn rollback_merge(
+    svn_bin: &str,
+    target: &str,
+    shelves_dir: &Path,
+    session_id: &str,
+) -> AppResult<bool> {
+    let shelf_dir = merge_shelf_dir(shelves_dir, session_id)?;
+    let recorded_target = fs::read_to_string(shelf_dir.join("target.txt"))?;
+    if recorded_target != target {
+        return Err(crate::errors::AppError::Other(
+            "合并会话与目标工作副本不匹配，已拒绝撤销".into(),
+        ));
+    }
+    let before_revert = wc_status_text(svn_bin, target);
+    let original_status = fs::read_to_string(shelf_dir.join("status.txt")).unwrap_or_default();
+    let original_added: HashSet<String> = added_status_paths(&original_status).into_iter().collect();
+    let merge_added = added_status_paths(&before_revert);
+    run_svn(svn_bin, &["revert", "-R", target])?;
+    // svn revert 不会删除原本处于 added 状态的实体文件，需清理本次合并新增项
+    for added in merge_added {
+        if original_added.contains(&added) {
+            continue;
+        }
+        let path = Path::new(&added);
+        // 只清理 SVN 返回的目标工作副本内绝对路径，拒绝处理范围不明的相对路径
+        if !path.is_absolute() || !path.starts_with(target) {
+            continue;
+        }
+        if path.is_file() {
+            fs::remove_file(path)?;
+        } else if path.is_dir() {
+            // 仅删除空目录，避免误删目录内已有的未版本化文件
+            let _ = fs::remove_dir(path);
+        }
+    }
+    restore_merge_shelf(svn_bin, target, shelves_dir, session_id)
+}
+
+fn added_status_paths(status: &str) -> Vec<String> {
+    status
+        .lines()
+        .filter(|line| line.starts_with('A'))
+        .filter_map(|line| line.get(8..).map(str::trim))
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// 自动搁置目标已有修改，再执行 update → merge；提交和搁置恢复由前端分步触发。
 pub fn run_merge_flow<F: FnMut(StreamLine)>(
     svn_bin: &str,
     route: &MergeRoute,
     revisions: &[u64],
-    message: &str,
     shelves_dir: &Path,
+    session_id: &str,
     mut on_line: F,
 ) -> bool {
     let target = &route.target_path;
 
-    // 1. develop/rest -> 个人分支 时，先搁置个人分支的本地修改
-    let mut shelf: Option<PathBuf> = None;
-    if route.sync_branch {
-        info(&mut on_line, "检查是否需要搁置目标本地修改...");
-        match shelve_target(svn_bin, route, shelves_dir, &mut on_line) {
-            Ok(p) => shelf = p,
-            Err(e) => {
-                on_line(StreamLine::Stderr(e));
-                return false;
-            }
+    let shelf_dir = match merge_shelf_dir(shelves_dir, session_id) {
+        Ok(path) => path,
+        Err(e) => {
+            on_line(StreamLine::Stderr(e.to_string()));
+            return false;
         }
+    };
+    // 先搁置目标已有修改，保证合并结果可以独立检查和提交
+    if let Err(e) = shelve_target(svn_bin, target, &shelf_dir, &mut on_line) {
+        on_line(StreamLine::Stderr(e));
+        return false;
     }
 
-    // 2. update，避免 mixed-revision 工作副本导致合并失败
+    // 1. update，避免 mixed-revision 工作副本导致合并失败
     info(&mut on_line, "开始执行 svn update...");
     if !run_step(
         svn_bin,
         &["update", "--non-interactive", target],
         &mut on_line,
     ) {
-        on_line(StreamLine::Stderr("svn update 失败，已中止合并。".into()));
+        on_line(StreamLine::Stderr(
+            "svn update 失败，已中止合并；可恢复搁置文件。".into(),
+        ));
         return false;
     }
-    let before = wc_status_text(svn_bin, target);
-
-    // 3. merge
+    // 2. merge
     info(&mut on_line, "开始执行 svn merge...");
     let url = source_url(svn_bin, &route.source_path);
     let arg = merge_revision_arg(revisions);
@@ -620,42 +712,19 @@ pub fn run_merge_flow<F: FnMut(StreamLine)>(
         &mut on_line,
     ) {
         on_line(StreamLine::Stderr(
-            "合并失败或存在冲突，请处理后再继续。".into(),
+            "合并失败或存在冲突，可撤销本次合并并恢复搁置文件。".into(),
         ));
         return false;
     }
 
-    let after = wc_status_text(svn_bin, target);
-    if after == before {
-        info(
-            &mut on_line,
-            "合并完成，但没有文件进入待提交状态，跳过提交。",
-        );
-        if let Some(dir) = &shelf {
-            restore_shelf(svn_bin, target, dir, &mut on_line);
-        }
-        return true;
-    }
-
-    // 4. commit
-    info(&mut on_line, "开始执行 svn commit...");
-    if !run_step(
-        svn_bin,
-        &["commit", "--non-interactive", target, "-m", message],
-        &mut on_line,
-    ) {
+    let status = wc_status_text(svn_bin, target);
+    if status.lines().any(|line| line.chars().take(7).any(|ch| ch == 'C')) {
         on_line(StreamLine::Stderr(
-            "提交失败，请根据输出处理。搁置代码（如有）尚未恢复。".into(),
+            "检测到合并冲突，可撤销本次合并并恢复搁置文件。".into(),
         ));
         return false;
     }
 
-    // 5. 恢复搁置
-    if let Some(dir) = &shelf {
-        info(&mut on_line, "开始恢复搁置的本地修改...");
-        restore_shelf(svn_bin, target, dir, &mut on_line);
-    }
-
-    info(&mut on_line, "合并流程完成。");
+    info(&mut on_line, "合并完成，变更已保留在目标工作副本，请检查后单独提交。");
     true
 }

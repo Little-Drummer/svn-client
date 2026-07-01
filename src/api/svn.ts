@@ -68,8 +68,12 @@ export const api = {
     invoke<MergeRevision[]>('merge_fetch_revisions', { route }),
   mergePreview: (route: MergeRoute, entries: MergeRevision[], revisions: number[]) =>
     invoke<MergePreview>('merge_preview', { route, entries, revisions }),
-  mergeExecute: (route: MergeRoute, revisions: number[], message: string) =>
-    invoke<string>('merge_execute', { route, revisions, message }),
+  mergeExecute: (route: MergeRoute, revisions: number[]) =>
+    invoke<string>('merge_execute', { route, revisions }),
+  mergeRollback: (taskId: string, targetPath: string) =>
+    invoke<boolean>('merge_rollback', { taskId, targetPath }),
+  mergeRestoreShelf: (taskId: string, targetPath: string) =>
+    invoke<boolean>('merge_restore_shelf', { taskId, targetPath }),
 
   // 增量打包
   packageFetchRevisions: (restPath: string, limit?: number) =>
