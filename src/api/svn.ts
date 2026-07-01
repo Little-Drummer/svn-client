@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type {
   Project,
   MergeRoute,
+  MergeRouteConfig,
   MergeRevision,
   MergePreview,
   PackageOptions,
@@ -19,6 +20,7 @@ import type {
   RemoteListEntry,
   WorkingCopyEntry,
   WorkingCopyFileEntry,
+  WorkingCopyStatusSummary,
 } from '../types/svn'
 
 export const api = {
@@ -56,6 +58,10 @@ export const api = {
     invoke<WorkingCopyEntry[]>('scan_and_add_project', { path }),
 
   // 多级合并
+  mergeGetRouteConfigs: (projectName: string) =>
+    invoke<MergeRouteConfig[]>('merge_get_route_configs', { projectName }),
+  mergeSaveRouteConfigs: (projectName: string, configs: MergeRouteConfig[]) =>
+    invoke<MergeRouteConfig[]>('merge_save_route_configs', { projectName, configs }),
   mergeListRoutes: (projectName: string) =>
     invoke<MergeRoute[]>('merge_list_routes', { projectName }),
   mergeFetchRevisions: (route: MergeRoute) =>
@@ -91,10 +97,12 @@ export const api = {
 
   // 查询
   info: (path: string) => invoke<SvnInfo>('svn_get_info', { path }),
-  status: (path: string, showUnversioned = true) =>
-    invoke<SvnStatusEntry[]>('svn_get_status', { path, showUnversioned }),
-  statusStream: (path: string, showUnversioned = true, requestId: string) =>
-    invoke<string>('svn_get_status_stream', { path, showUnversioned, requestId }),
+  status: (path: string, showUnversioned = true, showIgnored = false) =>
+    invoke<SvnStatusEntry[]>('svn_get_status', { path, showUnversioned, showIgnored }),
+  statusSummary: (path: string) =>
+    invoke<WorkingCopyStatusSummary>('svn_get_status_summary', { path }),
+  statusStream: (path: string, showUnversioned = true, showIgnored = false, requestId: string) =>
+    invoke<string>('svn_get_status_stream', { path, showUnversioned, showIgnored, requestId }),
   log: (params: {
     path: string
     limit?: number

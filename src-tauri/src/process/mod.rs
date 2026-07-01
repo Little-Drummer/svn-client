@@ -76,6 +76,7 @@ pub fn spawn_status_stream(
     svn_bin: String,
     target: String,
     show_unversioned: bool,
+    show_ignored: bool,
     request_id: String,
 ) -> String {
     let rid = request_id.clone();
@@ -86,19 +87,20 @@ pub fn spawn_status_stream(
         let mut batch: Vec<SvnStatusEntry> = Vec::with_capacity(BATCH);
         let mut total: usize = 0;
 
-        let result = svn_status_streaming(&svn_bin, &target, show_unversioned, |entry| {
-            batch.push(entry);
-            total += 1;
-            if batch.len() >= BATCH {
-                let _ = app.emit(
-                    STATUS_EVENT_NAME,
-                    StatusStreamEvent::Entries {
-                        request_id: rid.clone(),
-                        entries: std::mem::take(&mut batch),
-                    },
-                );
-            }
-        });
+        let result =
+            svn_status_streaming(&svn_bin, &target, show_unversioned, show_ignored, |entry| {
+                batch.push(entry);
+                total += 1;
+                if batch.len() >= BATCH {
+                    let _ = app.emit(
+                        STATUS_EVENT_NAME,
+                        StatusStreamEvent::Entries {
+                            request_id: rid.clone(),
+                            entries: std::mem::take(&mut batch),
+                        },
+                    );
+                }
+            });
 
         if !batch.is_empty() {
             let _ = app.emit(

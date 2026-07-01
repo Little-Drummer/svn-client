@@ -118,6 +118,7 @@ async function launchCommit(paths: string[], msg: string): Promise<string> {
   tasksStore.register({
     taskId: id,
     kind: 'commit',
+    workingCopyId: props.workingCopy.id,
     title: `提交 ${paths.length} 个文件`,
     command: `svn commit -m ${JSON.stringify(msg)} ${paths.join(' ')}`,
     retry: () => launchCommit(paths, msg),

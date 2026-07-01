@@ -43,6 +43,7 @@ import UpdatePanel from '../components/UpdatePanel.vue'
 
 import { api } from '../api/svn'
 import { useStatusStore } from '../stores/status'
+import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useErrorToast } from '../composables/use-error-toast'
 import { createGeneration } from '../composables/use-request-generation'
 import type { SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry } from '../types/svn'
@@ -50,6 +51,7 @@ import type { SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry } from '../
 const props = defineProps<{ workingCopy: WorkingCopyEntry }>()
 
 const statusStore = useStatusStore()
+const wcStore = useWorkingCopiesStore()
 const toast = useErrorToast()
 
 const selectedFile = ref<SvnStatusEntry | null>(null)
@@ -91,7 +93,7 @@ const STATUS_LABEL: Record<string, string> = {
   missing: '丢失',
   conflicted: '冲突',
   unversioned: '未跟踪',
-  ignored: '忽略',
+  ignored: '已忽略',
   obstructed: '阻塞',
   external: '外部',
   incomplete: '未完成',
@@ -183,6 +185,57 @@ const fileTreeByPath = computed(() => {
   }
   visit(fileTree.value)
   return map
+})
+
+function normalizeComparePath(path: string) {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+const ignoredRootPaths = computed(() => {
+  const roots: string[] = []
+  function visit(entries: WorkingCopyFileEntry[]) {
+    for (const entry of entries) {
+      if (entry.svnItem === 'ignored') {
+        roots.push(normalizeComparePath(entry.path))
+        continue
+      }
+      visit(entry.children)
+    }
+  }
+  visit(fileTree.value)
+  return roots
+})
+
+function isUnderIgnoredRoot(path: string) {
+  const normalized = normalizeComparePath(path)
+  return ignoredRootPaths.value.some((root) => normalized === root || normalized.startsWith(`${root}/`))
+}
+
+function rawFileStatus(path: string) {
+  if (isUnderIgnoredRoot(path)) return 'ignored'
+  return statusByPath.value.get(path)?.item ?? fileTreeByPath.value.get(path)?.svnItem ?? 'normal'
+}
+
+const inheritedModifiedStatusByPath = computed(() => {
+  const statuses = new Map<string, string>()
+
+  // 子孙节点存在已修改项时，逐级为普通父目录传递“已修改”状态。
+  function visit(entry: WorkingCopyFileEntry): boolean {
+    const ownStatus = rawFileStatus(entry.path)
+    let hasModified = ownStatus === 'modified'
+
+    for (const child of entry.children) {
+      if (visit(child)) hasModified = true
+    }
+
+    if (entry.kind === 'dir' && ownStatus === 'normal' && hasModified) {
+      statuses.set(entry.path, 'modified')
+    }
+    return hasModified
+  }
+
+  for (const entry of fileTree.value) visit(entry)
+  return statuses
 })
 
 function fileRevision(entry: WorkingCopyFileEntry) {
@@ -355,8 +408,11 @@ const flatFileTree = computed(() => {
   const rows: { entry: WorkingCopyFileEntry; depth: number }[] = []
   function visit(entries: WorkingCopyFileEntry[], depth: number) {
     for (const entry of entries) {
-      // 关闭未跟踪开关时，文件树里整块未跟踪/忽略的节点一并隐藏，保持与变更视图一致
-      if (!statusStore.showUnversioned && (entry.svnItem === 'unversioned' || entry.svnItem === 'ignored')) {
+      const status = rawFileStatus(entry.path)
+      if (!statusStore.showUnversioned && status === 'unversioned') {
+        continue
+      }
+      if (!statusStore.showIgnored && status === 'ignored') {
         continue
       }
       rows.push({ entry, depth })
@@ -373,7 +429,8 @@ type ChangeRow = { kind: 'entry'; entry: SvnStatusEntry }
 
 const flatChanges = computed<ChangeRow[]>(() => {
   return [...statusStore.entries]
-    .filter((entry) => statusStore.showUnversioned || (entry.item !== 'unversioned' && entry.item !== 'ignored'))
+    .filter((entry) => statusStore.showUnversioned || entry.item !== 'unversioned')
+    .filter((entry) => statusStore.showIgnored || entry.item !== 'ignored')
     .sort((a, b) => compareBySort(a, b, changeSortValue, (entry) => shortName(entry.path)))
     .map((entry) => ({ kind: 'entry', entry }))
 })
@@ -446,15 +503,30 @@ async function reload() {
   await reloadFileTree()
 }
 
+async function reloadAfterWorkingCopyChange() {
+  await wcStore.refresh(props.workingCopy.id)
+  await reload()
+}
+
 // 显式先写值再刷新，避免 v-model 与副作用监听器的执行顺序导致用旧 flag 拉取
 function onToggleUnversioned(v: boolean | 'indeterminate') {
   statusStore.showUnversioned = v === true
   if (!statusStore.showUnversioned) {
     // 隐藏未跟踪时同步清掉相关勾选，避免工具栏保留不可见文件的批量操作状态。
     for (const entry of statusStore.entries) {
-      if (entry.item === 'unversioned' || entry.item === 'ignored') {
+      if (entry.item === 'unversioned') {
         checkedPaths.value.delete(entry.path)
       }
+    }
+  }
+  reload().catch(toast)
+}
+
+function onToggleIgnored() {
+  statusStore.showIgnored = !statusStore.showIgnored
+  if (!statusStore.showIgnored) {
+    for (const entry of statusStore.entries) {
+      if (entry.item === 'ignored') checkedPaths.value.delete(entry.path)
     }
   }
   reload().catch(toast)
@@ -559,9 +631,25 @@ watch(selectedFile, async (entry) => {
   baseContent.value = null
   currentContent.value = null
   if (!entry) return
-  // unversioned/ignored 不能 svn diff
+  // 未跟踪/忽略文件以空 BASE 对比当前内容；丢失文件则以 BASE 对比空内容。
   if (entry.item === 'unversioned' || entry.item === 'ignored' || entry.item === 'missing') {
+    diffLoading.value = true
     diffText.value = ''
+    try {
+      if (entry.item === 'missing') {
+        const base = await api.baseContent(entry.path).catch(() => '')
+        if (!diffGen.isCurrent(token)) return
+        baseContent.value = base
+        currentContent.value = ''
+      } else {
+        const current = await api.readFileText(entry.path).catch(() => '')
+        if (!diffGen.isCurrent(token)) return
+        baseContent.value = ''
+        currentContent.value = current
+      }
+    } finally {
+      if (diffGen.isCurrent(token)) diffLoading.value = false
+    }
     return
   }
   diffLoading.value = true
@@ -645,8 +733,7 @@ function shortName(p: string) {
 }
 
 function fileStatus(path: string) {
-  const item = statusByPath.value.get(path)?.item ?? fileTreeByPath.value.get(path)?.svnItem ?? 'normal'
-  return !statusStore.showUnversioned && (item === 'unversioned' || item === 'ignored') ? 'normal' : item
+  return inheritedModifiedStatusByPath.value.get(path) ?? rawFileStatus(path)
 }
 
 function fileStatusLabel(path: string) {
@@ -680,7 +767,7 @@ function selectTreeEntry(entry: WorkingCopyFileEntry) {
     statusByPath.value.get(entry.path) ??
       ({
         path: entry.path,
-        item: 'normal',
+        item: fileStatus(entry.path),
         props: null,
         copied: false,
         revision: null,
@@ -980,6 +1067,15 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
         <span class="tool-sep" />
         <Switch :model-value="statusStore.showUnversioned" @update:model-value="onToggleUnversioned" />
         <span class="hint">未跟踪</span>
+        <Button
+          size="xs"
+          :variant="statusStore.showIgnored ? 'secondary' : 'ghost'"
+          class="toolbar-action"
+          @click="onToggleIgnored"
+        >
+          <EyeOff class="icon-xs" />
+          已忽略
+        </Button>
         <Button size="xs" variant="ghost" class="toolbar-action" @click="reload">
           <RefreshCw class="icon-xs" />
           刷新
@@ -1164,13 +1260,13 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
           :checked-paths="checkedCommittablePaths"
           :unversioned-paths="checkedUnversionedPaths"
           @exclude="excludeFromCommit"
-          @done="reload"
+          @done="reloadAfterWorkingCopyChange"
         />
         <UpdatePanel
           v-else-if="rightPane === 'update'"
           :working-copy="workingCopy"
           :checked-paths="[...checkedPaths]"
-          @done="reload"
+          @done="reloadAfterWorkingCopyChange"
         />
       </div>
     </aside>

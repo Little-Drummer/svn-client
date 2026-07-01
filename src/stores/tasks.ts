@@ -15,6 +15,7 @@ const MAX_LINES = 5000
 export interface RunningTask {
   taskId: string
   kind: TaskKind
+  workingCopyId?: string // 关联工作副本，用于任务完成后精准刷新对应状态。
   title: string
   command?: string // 等价命令行（敏感参数已打码），供用户核对实际执行的命令
   startedAt: number
@@ -29,6 +30,15 @@ export interface RunningTask {
 export const useTasksStore = defineStore('tasks', () => {
   const tasks = reactive(new Map<string, RunningTask>())
   const activeTaskId = ref<string | null>(null)
+  // 显式发布任务完成信号，避免依赖 Map 内部对象变更的深度监听。
+  const completedTask = ref<{
+    taskId: string
+    kind: TaskKind
+    workingCopyId?: string
+    success: boolean
+    version: number
+  } | null>(null)
+  let completedTaskVersion = 0
   // 自增信号：从没有独立输出面板的入口（如工作副本右键更新）发起任务时，请求弹开任务中心
   const centerOpenRequest = ref(0)
   // 持有 listen 的 Promise 而非结果做防重：多个组件挂载时并发调用，
@@ -99,6 +109,13 @@ export const useTasksStore = defineStore('tasks', () => {
         t.exitCode = ev.exitCode ?? null
         t.canceled = ev.canceled ?? false
         t.canceling = false
+        completedTask.value = {
+          taskId: t.taskId,
+          kind: t.kind,
+          workingCopyId: t.workingCopyId,
+          success: ev.success,
+          version: ++completedTaskVersion,
+        }
         break
     }
   }
@@ -134,6 +151,7 @@ export const useTasksStore = defineStore('tasks', () => {
   function register(task: {
     taskId: string
     kind: TaskKind
+    workingCopyId?: string
     title: string
     command?: string
     retry?: () => Promise<string>
@@ -141,6 +159,7 @@ export const useTasksStore = defineStore('tasks', () => {
     tasks.set(task.taskId, {
       taskId: task.taskId,
       kind: task.kind,
+      workingCopyId: task.workingCopyId,
       title: task.title,
       command: task.command,
       startedAt: Date.now(),
@@ -253,6 +272,7 @@ export const useTasksStore = defineStore('tasks', () => {
   return {
     tasks,
     activeTaskId,
+    completedTask,
     centerOpenRequest,
     runningCount,
     ensureListener,

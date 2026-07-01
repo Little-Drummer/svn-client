@@ -13,6 +13,7 @@ export const useStatusStore = defineStore('status', () => {
   const loading = ref(false)
   const lastError = ref<string | null>(null)
   const showUnversioned = ref(true)
+  const showIgnored = ref(false)
 
   // 代际令牌：切 WC 或快速重复刷新时，丢弃已被超越的请求结果，避免旧数据覆盖新数据
   const gen = createGeneration()
@@ -65,7 +66,7 @@ export const useStatusStore = defineStore('status', () => {
       // command 返回前后端就可能推送事件，必须先登记 ID，避免小工作副本的快速结果被过滤。
       const requestId = crypto.randomUUID()
       activeRequestId = requestId
-      await api.statusStream(path, showUnversioned.value, requestId)
+      await api.statusStream(path, showUnversioned.value, showIgnored.value, requestId)
     } catch (e: unknown) {
       lastError.value = String((e as { message?: string })?.message ?? e)
       entries.value = []
@@ -84,7 +85,7 @@ export const useStatusStore = defineStore('status', () => {
     loading.value = true
     lastError.value = null
     try {
-      const result = await api.status(path, showUnversioned.value)
+      const result = await api.status(path, showUnversioned.value, showIgnored.value)
       if (!gen.isCurrent(token)) return
       entries.value = result
     } catch (e: unknown) {
@@ -96,5 +97,5 @@ export const useStatusStore = defineStore('status', () => {
     }
   }
 
-  return { entries, loading, lastError, showUnversioned, reload, reloadStreaming }
+  return { entries, loading, lastError, showUnversioned, showIgnored, reload, reloadStreaming }
 })

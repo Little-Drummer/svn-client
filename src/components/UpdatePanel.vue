@@ -42,6 +42,7 @@ async function launchUpdate(target: string, rev: string | undefined): Promise<st
   tasksStore.register({
     taskId: id,
     kind: 'update',
+    workingCopyId: props.workingCopy.id,
     title: `更新 ${single ? '选中文件' : '整个工作副本'} 到 ${rev || 'HEAD'}`,
     command: `svn update${rev ? ` -r ${rev}` : ''} ${target}`,
     retry: () => launchUpdate(target, rev),
@@ -52,7 +53,8 @@ async function launchUpdate(target: string, rev: string | undefined): Promise<st
 watch(
   () => taskId.value && tasksStore.tasks.get(taskId.value)?.finished,
   (finished) => {
-    if (finished) emit('done')
+    const task = taskId.value ? tasksStore.tasks.get(taskId.value) : null
+    if (finished && task?.success) emit('done')
   },
 )
 </script>

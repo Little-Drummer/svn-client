@@ -235,7 +235,7 @@ async function openLog(entry: RemoteListEntry) {
     const info = await api.info(entry.url)
     repositoryRoot = info.repositoryRoot
   } catch (e) {
-    // 取根失败不阻断查看日志，只是单文件左右对比会退回 unified
+    // 取根失败不阻断查看日志，但单文件左右对比需要仓库根地址。
     toast.error('读取仓库信息失败', describeError(e))
   }
   logTarget.value = {

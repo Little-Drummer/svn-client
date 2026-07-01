@@ -43,6 +43,17 @@ export interface MergeRoute {
   syncBranch: boolean
 }
 
+export interface MergeRouteConfig {
+  id: string
+  projectName: string
+  name: string
+  sourceEnv: string
+  sourceModule: string
+  targetEnv: string
+  targetModule: string
+  enabled: boolean
+}
+
 // 候选合并版本，与后端 MergeRevision 对应
 export interface MergeRevision {
   revision: number
@@ -197,6 +208,13 @@ export interface SvnStatusEntry {
   commitRevision?: number | null
   commitAuthor?: string | null
   commitDate?: string | null
+  reposItem?: string | null
+  reposProps?: string | null
+}
+
+export interface WorkingCopyStatusSummary {
+  uncommitted: number
+  outdated: number
 }
 
 export interface SvnLogPath {

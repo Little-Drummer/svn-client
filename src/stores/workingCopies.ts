@@ -13,6 +13,9 @@ export const useWorkingCopiesStore = defineStore('workingCopies', () => {
     initialFocus?.side === 'wc' ? initialFocus.id : null,
   )
   const loading = ref(false)
+  // 携带具体工作副本 ID，通知侧栏只重新读取对应项目的状态数量。
+  const statusRefreshRequest = ref<{ id: string; version: number } | null>(null)
+  let statusRefreshVersion = 0
 
   const selected = computed(() => items.value.find((wc) => wc.id === selectedId.value) ?? null)
 
@@ -75,6 +78,7 @@ export const useWorkingCopiesStore = defineStore('workingCopies', () => {
     const entry = await api.refreshWorkingCopy(id)
     const idx = items.value.findIndex((wc) => wc.id === id)
     if (idx >= 0) items.value[idx] = entry
+    statusRefreshRequest.value = { id, version: ++statusRefreshVersion }
     return entry
   }
 
@@ -96,6 +100,7 @@ export const useWorkingCopiesStore = defineStore('workingCopies', () => {
     selectedId,
     selected,
     loading,
+    statusRefreshRequest,
     reload,
     add,
     scanProject,

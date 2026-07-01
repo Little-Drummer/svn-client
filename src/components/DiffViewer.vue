@@ -7,23 +7,17 @@ import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
 import { ensureMonacoEnv } from '../composables/monaco-setup'
 import { currentSvnTheme, registerSvnThemes } from '../composables/monaco-theme'
 
-type DiffMode = 'unified' | 'split'
-
 const props = defineProps<{
-  // unified diff 文本（来自 svn diff），用作 unified 模式直接展示
+  // svn diff 文本用于识别二进制文件。
   diffText: string | null
-  // split 模式需要原文件 BASE 内容 + 当前内容
+  // 左右对比需要原文件 BASE 内容和当前内容。
   baseContent?: string | null
   currentContent?: string | null
   filename?: string | null
   loading?: boolean
-  // 初始呈现模式；log 视图查看单文件改动时默认 split（左右对比）
-  initialMode?: DiffMode
 }>()
 
-const mode = ref<DiffMode>(props.initialMode ?? 'unified')
 const containerRef = ref<HTMLDivElement | null>(null)
-const editorInstance = shallowRef<monaco.editor.IStandaloneCodeEditor | null>(null)
 const diffInstance = shallowRef<monaco.editor.IStandaloneDiffEditor | null>(null)
 
 // 系统主题变化时切换 monaco 主题，避免暗色界面里出现白底 diff
@@ -37,16 +31,14 @@ const isBinary = computed(() => {
   return /Cannot display:.*binary/i.test(props.diffText ?? '')
 })
 
-const isEmpty = computed(() => {
-  // split 模式直接喂全文（diffText 可能为空），以两侧内容判断是否有可展示的东西
-  if (mode.value === 'split') {
-    return (props.baseContent ?? '') === '' && (props.currentContent ?? '') === ''
-  }
-  return !props.diffText || props.diffText.trim().length === 0
-})
+const hasSplitContent = computed(
+  () => props.baseContent != null && props.currentContent != null,
+)
 
-// 跟踪当前编辑器实际处于哪种模式；用于判断本轮 refresh 是"切模式"还是"换内容"
-let activeMode: DiffMode | null = null
+const isEmpty = computed(() => {
+  if (!hasSplitContent.value) return true
+  return (props.baseContent ?? '') === '' && (props.currentContent ?? '') === ''
+})
 
 function disposeSplitModels() {
   const m = diffInstance.value?.getModel()
@@ -56,11 +48,8 @@ function disposeSplitModels() {
 
 function disposeAll() {
   disposeSplitModels()
-  editorInstance.value?.dispose()
   diffInstance.value?.dispose()
-  editorInstance.value = null
   diffInstance.value = null
-  activeMode = null
 }
 
 function detectLanguage(name: string | null | undefined): string {
@@ -75,31 +64,6 @@ function detectLanguage(name: string | null | undefined): string {
     sh: 'shell', sql: 'sql',
   }
   return map[ext] ?? 'plaintext'
-}
-
-function createUnified() {
-  if (!containerRef.value) return
-  editorInstance.value = monaco.editor.create(containerRef.value, {
-    value: props.diffText ?? '',
-    language: 'diff',
-    readOnly: true,
-    theme: currentSvnTheme(),
-    automaticLayout: true,
-    minimap: { enabled: false },
-    renderWhitespace: 'selection',
-    scrollBeyondLastLine: false,
-    fontSize: 12,
-    fontFamily: "'SF Mono', ui-monospace, Menlo, Consolas, monospace",
-    fontLigatures: false,
-    lineHeight: 18,
-    padding: { top: 8, bottom: 8 },
-    smoothScrolling: true,
-    cursorBlinking: 'smooth',
-    cursorSmoothCaretAnimation: 'on',
-    renderLineHighlight: 'line',
-    guides: { indentation: false },
-  })
-  activeMode = 'unified'
 }
 
 function createSplit() {
@@ -124,10 +88,9 @@ function createSplit() {
     original: monaco.editor.createModel(props.baseContent ?? '', lang),
     modified: monaco.editor.createModel(props.currentContent ?? '', lang),
   })
-  activeMode = 'split'
 }
 
-// 同模式下只更新内容，避免重建编辑器；切模式才销毁重建
+// 固定使用左右对比，同一编辑器内只替换模型，避免文件切换时反复重建实例。
 function refresh() {
   if (isBinary.value || isEmpty.value) {
     disposeAll()
@@ -137,25 +100,16 @@ function refresh() {
     // 模板还没渲染出宿主节点，等下一次 flush（watcher 用 post）
     return
   }
-  if (activeMode !== mode.value) {
-    disposeAll()
-    if (mode.value === 'unified') createUnified()
-    else createSplit()
+  if (!diffInstance.value) {
+    createSplit()
     return
   }
-  if (mode.value === 'unified' && editorInstance.value) {
-    const next = props.diffText ?? ''
-    if (editorInstance.value.getValue() !== next) {
-      editorInstance.value.setValue(next)
-    }
-  } else if (mode.value === 'split' && diffInstance.value) {
-    const lang = detectLanguage(props.filename)
-    disposeSplitModels()
-    diffInstance.value.setModel({
-      original: monaco.editor.createModel(props.baseContent ?? '', lang),
-      modified: monaco.editor.createModel(props.currentContent ?? '', lang),
-    })
-  }
+  const lang = detectLanguage(props.filename)
+  disposeSplitModels()
+  diffInstance.value.setModel({
+    original: monaco.editor.createModel(props.baseContent ?? '', lang),
+    modified: monaco.editor.createModel(props.currentContent ?? '', lang),
+  })
 }
 
 onMounted(() => {
@@ -175,7 +129,7 @@ onBeforeUnmount(() => {
 
 // flush: 'post' 保证 isEmpty/isBinary 变化导致的 DOM 重渲染后再 refresh，containerRef 才是有效的
 watch(
-  () => [props.diffText, props.baseContent, props.currentContent, props.filename, mode.value],
+  () => [props.diffText, props.baseContent, props.currentContent, props.filename],
   () => refresh(),
   { flush: 'post' },
 )
@@ -183,25 +137,6 @@ watch(
 
 <template>
   <div class="diff-wrap">
-    <div class="diff-toolbar">
-      <div class="segmented">
-        <button
-          type="button"
-          :class="['seg-btn', mode === 'unified' && 'is-active']"
-          @click="mode = 'unified'"
-        >
-          Unified
-        </button>
-        <button
-          type="button"
-          :class="['seg-btn', mode === 'split' && 'is-active']"
-          @click="mode = 'split'"
-        >
-          左右对比
-        </button>
-      </div>
-      <span v-if="filename" class="diff-filename mono" :title="filename">{{ filename }}</span>
-    </div>
     <div class="diff-body">
       <LoadingSpinner v-if="loading" />
       <div v-else-if="isBinary" class="hint">二进制文件，无法在编辑器中对比。</div>
@@ -218,66 +153,6 @@ watch(
   height: 100%;
   min-height: 0;
   background: var(--mat-content);
-}
-.diff-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 36px;
-  flex: none;
-  padding: 0 12px;
-  border-bottom: var(--hairline) solid var(--stroke-soft);
-  background: var(--mat-toolbar);
-  backdrop-filter: var(--vibrancy-toolbar);
-  -webkit-backdrop-filter: var(--vibrancy-toolbar);
-}
-.segmented {
-  display: inline-flex;
-  height: 22px;
-  padding: 2px;
-  gap: 2px;
-  border-radius: 7px;
-  background: rgba(0, 0, 0, 0.06);
-  border: var(--hairline) solid var(--stroke-soft);
-}
-.dark .segmented {
-  background: rgba(255, 255, 255, 0.05);
-}
-.seg-btn {
-  height: 18px;
-  padding: 0 8px;
-  border: 0;
-  background: transparent;
-  border-radius: 5px;
-  font-size: var(--fs-caption);
-  font-weight: 500;
-  color: var(--fg-muted);
-  cursor: default;
-  transition: background-color 140ms ease-out, color 140ms ease-out, box-shadow 160ms ease-out;
-}
-.seg-btn:hover {
-  color: var(--fg);
-}
-.seg-btn.is-active {
-  color: var(--fg-strong);
-  background: var(--mat-elevated);
-  box-shadow:
-    inset 0 0 0 0.5px var(--stroke),
-    0 1px 1.5px rgba(0, 0, 0, 0.06);
-}
-.dark .seg-btn.is-active {
-  box-shadow:
-    inset 0 0 0 0.5px rgba(255, 255, 255, 0.08),
-    0 1px 1.5px rgba(0, 0, 0, 0.4);
-}
-.diff-filename {
-  font-size: var(--fs-callout);
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 1;
 }
 .diff-body {
   flex: 1;

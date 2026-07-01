@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::AppResult;
-use crate::models::{Project, ProjectModule};
+use crate::models::{MergeRouteConfig, Project, ProjectModule};
 use crate::svn::info::svn_info;
 use crate::svn::log::{svn_log, LogOptions};
 use crate::svn::runner::run_svn;
@@ -180,6 +180,42 @@ pub fn build_routes(project: &Project) -> Vec<MergeRoute> {
         }
     }
 
+    routes
+}
+
+pub fn build_configured_routes(project: &Project, configs: &[MergeRouteConfig]) -> Vec<MergeRoute> {
+    let mut routes = Vec::new();
+    for config in configs {
+        if !config.enabled || config.project_name != project.name {
+            continue;
+        }
+        let Some(source) = find_module(project, &config.source_env, &config.source_module) else {
+            continue;
+        };
+        let Some(target) = find_module(project, &config.target_env, &config.target_module) else {
+            continue;
+        };
+        if source.path == target.path {
+            continue;
+        }
+        let source_label = format!("{}/{}", config.source_env, config.source_module);
+        let target_label = format!("{}/{}", config.target_env, config.target_module);
+        let name = if config.name.trim().is_empty() {
+            format!("{source_label} -> {target_label}")
+        } else {
+            config.name.clone()
+        };
+        routes.push(MergeRoute {
+            id: format!("custom:{}", config.id),
+            name,
+            source_label,
+            source_path: source.path.clone(),
+            target_path: target.path.clone(),
+            kind: "自定义方向".into(),
+            personal_branch: None,
+            sync_branch: false,
+        });
+    }
     routes
 }
 
