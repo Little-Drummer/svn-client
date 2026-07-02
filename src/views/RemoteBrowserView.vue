@@ -11,12 +11,14 @@ import ContextMenu, { type ContextMenuItem } from '@/components/ui-local/Context
 import LogView from './LogView.vue'
 import { useAppToast } from '@/composables/use-app-toast'
 import { api, describeError } from '../api/svn'
+import { useRepositoriesStore } from '../stores/repositories'
 import type { LogTarget, RemoteListEntry, RepositoryEntry } from '../types/svn'
 
 const props = defineProps<{ repository: RepositoryEntry | null }>()
 const emit = defineEmits<{ checkout: [repo: RepositoryEntry] }>()
 
 const toast = useAppToast()
+const repoStore = useRepositoriesStore()
 
 // 远端目录树节点:包一层 RemoteListEntry,附带懒加载与展开状态
 interface RemoteTreeNode {
@@ -43,6 +45,9 @@ const manualUrl = ref('')
 const previewOpen = ref(false)
 
 const repoRoot = computed(() => props.repository?.url.trim().replace(/\/+$/, '') ?? '')
+
+// 面包屑实际锚点:优先用 svn info 探测到的真正仓库根,跳出书签子树时才会与 repoRoot 不同
+const repoRootUrl = ref('')
 
 const searchQuery = ref('')
 
@@ -75,17 +80,30 @@ const visibleNodes = computed<RemoteTreeNode[]>(() => {
 })
 
 const crumbs = computed(() => {
-  if (!repoRoot.value || !currentUrl.value.startsWith(repoRoot.value)) return []
-  const rest = currentUrl.value.slice(repoRoot.value.length).replace(/^\/+/, '')
+  const base = repoRootUrl.value || repoRoot.value
+  if (!base || !currentUrl.value.startsWith(base)) return []
+  const rest = currentUrl.value.slice(base.length).replace(/^\/+/, '')
   const parts = rest ? rest.split('/').filter(Boolean) : []
-  const result = [{ label: props.repository?.name ?? '仓库', url: repoRoot.value }]
-  let url = repoRoot.value
+  const result = [{ label: props.repository?.name ?? '仓库', url: base }]
+  let url = base
   for (const part of parts) {
     url = `${url}/${part}`
     result.push({ label: decodeURIComponent(part), url })
   }
   return result
 })
+
+// currentUrl 跳出已缓存的仓库根(例如地址栏直接输入了书签路径之外的兄弟目录)时,
+// 向 svn info 取真正的仓库根重新锚定,避免面包屑永久失效
+async function ensureRepoRoot(url: string) {
+  if (repoRootUrl.value && url.startsWith(repoRootUrl.value)) return
+  try {
+    const info = await api.info(url)
+    repoRootUrl.value = info.repositoryRoot.trim().replace(/\/+$/, '')
+  } catch {
+    // 取根失败不阻断浏览,面包屑退化为按书签 URL 计算
+  }
+}
 
 function formatSize(size?: number | null) {
   if (!size) return ''
@@ -113,11 +131,13 @@ async function load(url = currentUrl.value) {
   try {
     currentUrl.value = url.trim().replace(/\/+$/, '')
     manualUrl.value = currentUrl.value
+    void ensureRepoRoot(currentUrl.value)
     const list = await api.listRemote({
       url: currentUrl.value,
       username: props.repository.username ?? undefined,
     })
     tree.value = list.map((e) => makeNode(e, 0))
+    if (props.repository) repoStore.setLastBrowsedUrl(props.repository.id, currentUrl.value)
   } catch (e) {
     tree.value = []
     toast.error('加载远端目录失败', describeError(e))
@@ -218,6 +238,16 @@ function openRowContextMenu(event: MouseEvent, entry: RemoteListEntry) {
   ctxOpen.value = true
 }
 
+// 列表空白处右键:菜单目标指向当前目录本身,复用同一套菜单(查看日志/检出到本地)
+function openBlankContextMenu(event: MouseEvent) {
+  if (!currentUrl.value) return
+  const label = crumbs.value[crumbs.value.length - 1]?.label ?? props.repository?.name ?? '当前目录'
+  ctxEntry.value = { name: label, path: currentUrl.value, url: currentUrl.value, kind: 'dir' }
+  ctxX.value = event.clientX
+  ctxY.value = event.clientY
+  ctxOpen.value = true
+}
+
 function onCtxSelect(key: string) {
   const entry = ctxEntry.value
   if (!entry) return
@@ -256,9 +286,12 @@ watch(
   () => {
     if (!props.repository) return
     logTarget.value = null
-    currentUrl.value = repoRoot.value
-    manualUrl.value = repoRoot.value
-    load(repoRoot.value)
+    // 优先恢复该仓库上次浏览到的路径(跨远端/本地视图切换或组件重建都能找回),没有记录时才回默认根
+    const startUrl = repoStore.lastBrowsedUrl[props.repository.id] || repoRoot.value
+    repoRootUrl.value = repoRoot.value
+    currentUrl.value = startUrl
+    manualUrl.value = startUrl
+    load(startUrl)
   },
   { immediate: true },
 )
@@ -341,7 +374,7 @@ watch(
             <span>作者</span>
             <span>时间</span>
           </div>
-          <div class="remote-scroll">
+          <div class="remote-scroll" @contextmenu.prevent="openBlankContextMenu($event)">
             <LoadingSpinner v-if="loading" />
             <EmptyState v-else-if="tree.length === 0" description="目录为空" />
             <EmptyState v-else-if="visibleNodes.length === 0" description="无匹配项" />
@@ -352,7 +385,7 @@ watch(
                 :class="['remote-row', { active: selected?.url === node.entry.url }]"
                 @click="selectEntry(node.entry)"
                 @dblclick="previewEntry(node.entry)"
-                @contextmenu.prevent="openRowContextMenu($event, node.entry)"
+                @contextmenu.prevent.stop="openRowContextMenu($event, node.entry)"
               >
                 <div class="entry-lead" :style="{ paddingLeft: `${node.depth * 16}px` }">
                   <button

@@ -15,6 +15,7 @@ import {
   FolderSearch,
   Plus,
   RefreshCw,
+  ScrollText,
   Trash2,
   Undo2,
   EyeOff,
@@ -49,6 +50,7 @@ import { createGeneration } from '../composables/use-request-generation'
 import type { SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry } from '../types/svn'
 
 const props = defineProps<{ workingCopy: WorkingCopyEntry }>()
+const emit = defineEmits<{ 'view-log': [] }>()
 
 const statusStore = useStatusStore()
 const wcStore = useWorkingCopiesStore()
@@ -889,6 +891,22 @@ function openRowContextMenu(event: MouseEvent, path: string, item: string) {
   ctxOpen.value = true
 }
 
+// 列表空白处右键:与具体文件无关,只提供查看当前工作副本历史的入口
+const blankCtxOpen = ref(false)
+const blankCtxX = ref(0)
+const blankCtxY = ref(0)
+const blankCtxItems: ContextMenuItem[] = [{ key: 'log', label: '查看日志', icon: ScrollText }]
+
+function openBlankContextMenu(event: MouseEvent) {
+  blankCtxX.value = event.clientX
+  blankCtxY.value = event.clientY
+  blankCtxOpen.value = true
+}
+
+function onBlankCtxSelect(key: string) {
+  if (key === 'log') emit('view-log')
+}
+
 // 是否纳入版本控制（用于决定可用的菜单项）
 const VERSIONED = ['modified', 'added', 'deleted', 'replaced', 'conflicted', 'missing']
 
@@ -1107,7 +1125,12 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
           </button>
         </div>
       </div>
-      <div v-if="leftMode === 'tree'" ref="treeScrollRef" class="tree-scroll virtual-scroll">
+      <div
+        v-if="leftMode === 'tree'"
+        ref="treeScrollRef"
+        class="tree-scroll virtual-scroll"
+        @contextmenu.prevent="openBlankContextMenu($event)"
+      >
         <LoadingSpinner v-if="fileTreeLoading" />
         <EmptyState
           v-else-if="flatFileTree.length === 0"
@@ -1127,7 +1150,7 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
             <div
               :class="['tree-row', 'tree-row-virt', { active: selectedTreePath === flatFileTree[vRow.index].entry.path }]"
               @click="selectTreeEntry(flatFileTree[vRow.index].entry)"
-              @contextmenu.prevent="flatFileTree[vRow.index].entry.kind === 'file'
+              @contextmenu.prevent.stop="flatFileTree[vRow.index].entry.kind === 'file'
                 && openRowContextMenu($event, flatFileTree[vRow.index].entry.path, fileStatus(flatFileTree[vRow.index].entry.path))"
             >
               <div class="name-cell" :style="{ paddingLeft: `${8 + flatFileTree[vRow.index].depth * 16}px` }">
@@ -1171,7 +1194,12 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
           </div>
         </div>
       </div>
-      <div v-else ref="changesScrollRef" class="list-scroll virtual-scroll">
+      <div
+        v-else
+        ref="changesScrollRef"
+        class="list-scroll virtual-scroll"
+        @contextmenu.prevent="openBlankContextMenu($event)"
+      >
         <LoadingSpinner v-if="statusStore.loading" />
         <EmptyState
           v-else-if="flatChanges.length === 0"
@@ -1190,7 +1218,7 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
               <div
                 :class="['file-row', 'file-row-virt', { active: selectedFile?.path === (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path }]"
                 @click="openFileDiff((flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry)"
-                @contextmenu.prevent="openRowContextMenu(
+                @contextmenu.prevent.stop="openRowContextMenu(
                   $event,
                   (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.path,
                   (flatChanges[vRow.index] as Extract<ChangeRow, { kind: 'entry' }>).entry.item,
@@ -1303,6 +1331,13 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
       :y="ctxY"
       :items="ctxItems"
       @select="onCtxSelect"
+    />
+    <ContextMenu
+      v-model:open="blankCtxOpen"
+      :x="blankCtxX"
+      :y="blankCtxY"
+      :items="blankCtxItems"
+      @select="onBlankCtxSelect"
     />
   </div>
 </template>

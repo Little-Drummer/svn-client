@@ -159,13 +159,18 @@ watch(
   min-height: 0;
   display: flex;
   align-items: stretch;
-  justify-content: stretch;
 }
-.diff-body .monaco-host {
+/* justify-content: stretch 在 flex 主轴上的支持不稳定（WKWebView 里会退化成 flex-start），
+   显式给每个占位态 flex:1 撑满宽度，图标/文案才能真正居中而不是贴在左上角。 */
+.diff-body > * {
   flex: 1;
+  min-width: 0;
 }
 .hint {
-  margin: 32px auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
   color: var(--fg-muted);
   font-size: var(--fs-callout);
 }
