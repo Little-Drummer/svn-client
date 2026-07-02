@@ -13,6 +13,8 @@ export const useRepositoriesStore = defineStore('repositories', () => {
     initialFocus?.side === 'repo' ? initialFocus.id : null,
   )
   const loading = ref(false)
+  // 记住每个仓库最近浏览到的远端路径,在远端/本地视图切换导致浏览器组件重建时恢复
+  const lastBrowsedUrl = ref<Record<string, string>>({})
 
   const selected = computed(() => items.value.find((repo) => repo.id === selectedId.value) ?? null)
 
@@ -46,6 +48,7 @@ export const useRepositoriesStore = defineStore('repositories', () => {
     await api.removeRepository(id)
     items.value = items.value.filter((repo) => repo.id !== id)
     if (selectedId.value === id) selectedId.value = null
+    delete lastBrowsedUrl.value[id]
   }
 
   function select(id: string | null) {
@@ -53,5 +56,20 @@ export const useRepositoriesStore = defineStore('repositories', () => {
     if (id) saveFocus({ side: 'repo', id })
   }
 
-  return { items, selectedId, selected, loading, reload, save, remove, select }
+  function setLastBrowsedUrl(id: string, url: string) {
+    lastBrowsedUrl.value[id] = url
+  }
+
+  return {
+    items,
+    selectedId,
+    selected,
+    loading,
+    lastBrowsedUrl,
+    reload,
+    save,
+    remove,
+    select,
+    setLastBrowsedUrl,
+  }
 })

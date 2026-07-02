@@ -346,7 +346,11 @@ function onRepositorySelect() {
           <WorkflowBoardView @navigate="onBoardNavigate" />
         </TabsContent>
         <TabsContent value="status" class="tab-pane" force-mount>
-          <StatusView v-if="selected && !selectedUnavailable" :working-copy="selected" />
+          <StatusView
+            v-if="selected && !selectedUnavailable"
+            :working-copy="selected"
+            @view-log="tab = 'log'"
+          />
           <div v-else-if="selectedUnavailable" class="empty-pane unavailable-pane">
             <p class="unavailable-title">工作副本路径不可用</p>
             <p class="mono unavailable-path">{{ selected?.path }}</p>

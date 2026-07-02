@@ -274,5 +274,4 @@ export type AppErrorPayload =
   | { kind: 'json'; message: string }
   | { kind: 'invalid_path'; message: string }
   | { kind: 'not_working_copy'; message: string }
-  | { kind: 'task_not_found'; message: string }
   | { kind: 'other'; message: string }

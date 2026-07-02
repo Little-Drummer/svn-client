@@ -128,17 +128,29 @@ async function openFileDiff(rev: number, p: SvnLogPath) {
   }
   fileDiff.value = { rev, path: p.path, name }
 
+  // p.path 是这条日志在 rev 时刻的路径；用 @rev 钉住 peg revision，
+  // svn 才会顺着改名/移动历史去找 rev-1 的内容，否则一旦中间发生过改名，
+  // 不加 peg 的写法会先按当前/HEAD 语义解析这个路径，跨改名直接报 "文件未找到"。
+  const pegUrl = `${url}@${rev}`
+
   const token = diffGen.next()
   baseContent.value = null
   currentContent.value = null
   diffText.value = null
   diffLoading.value = true
   try {
-    // 新增文件在 N-1 不存在、删除文件在 N 不存在，读取失败的一侧按空内容处理。
+    // 新增文件在 N-1 本就不存在、删除文件在 N 本就不存在，这两种预期内的缺失按空内容处理；
+    // 其余情况读取失败要报出来，不能悄悄当成"没有改动"，否则会跟真的无变更混淆。
     const [base, cur, dt] = await Promise.all([
-      api.catRevision(url, Math.max(rev - 1, 0)).catch(() => ''),
-      api.catRevision(url, rev).catch(() => ''),
-      api.diffRevision(url, rev).catch(() => ''),
+      api.catRevision(pegUrl, Math.max(rev - 1, 0)).catch((e) => {
+        if (p.action === 'A') return ''
+        throw e
+      }),
+      api.catRevision(pegUrl, rev).catch((e) => {
+        if (p.action === 'D') return ''
+        throw e
+      }),
+      api.diffRevision(pegUrl, rev).catch(() => ''),
     ])
     if (!diffGen.isCurrent(token)) return
     baseContent.value = base
