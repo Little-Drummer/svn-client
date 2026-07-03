@@ -64,17 +64,16 @@ fn default_svn_bin() -> String {
 
 #[cfg(target_os = "macos")]
 fn find_macos_svn() -> Option<PathBuf> {
-    // 先尊重启动环境中的 PATH，再覆盖 Homebrew、MacPorts 和系统常见安装位置。
-    if let Some(paths) = std::env::var_os("PATH") {
-        if let Some(path) = std::env::split_paths(&paths)
-            .map(|dir| dir.join("svn"))
-            .find(|path| path.is_file())
-        {
-            return Some(path);
-        }
-    }
+    let path_candidates = std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .map(|dir| dir.join("svn"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
-    [
+    // 先尊重启动环境中的 PATH，再覆盖 Homebrew、MacPorts 和系统常见安装位置。
+    let common_candidates = [
         "/opt/homebrew/bin/svn",
         "/opt/homebrew/opt/subversion/bin/svn",
         "/usr/local/bin/svn",
@@ -83,8 +82,14 @@ fn find_macos_svn() -> Option<PathBuf> {
         "/usr/bin/svn",
     ]
     .into_iter()
-    .map(PathBuf::from)
-    .find(|path| path.is_file())
+    .map(PathBuf::from);
+
+    first_existing_file(path_candidates.into_iter().chain(common_candidates))
+}
+
+#[cfg(target_os = "macos")]
+fn first_existing_file(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    paths.into_iter().find(|path| path.is_file())
 }
 
 fn config_file_path(app: &AppHandle) -> AppResult<PathBuf> {
@@ -138,4 +143,23 @@ fn migrate_legacy_working_copy_paths(config: &mut AppConfig) -> bool {
         }
     }
     changed
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::first_existing_file;
+    use std::fs;
+
+    #[test]
+    fn svn_path_detection_skips_missing_candidates() {
+        let dir = std::env::temp_dir().join(format!("svn-client-{}", uuid::Uuid::new_v4()));
+        let svn = dir.join("svn");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&svn, b"").unwrap();
+
+        let found = first_existing_file([dir.join("missing-svn"), svn.clone()]);
+
+        assert_eq!(found, Some(svn));
+        fs::remove_dir_all(dir).unwrap();
+    }
 }
