@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   Project,
+  ConflictAccept,
+  ConflictDetails,
   MergeRoute,
   MergeRouteConfig,
   MergeRevision,
@@ -13,6 +15,8 @@ import type {
   CapturePresetFile,
   ConfigPreset,
   PresetApplyPlan,
+  RollbackResult,
+  ShelfEntry,
   SvnInfo,
   SvnLogEntry,
   SvnStatusEntry,
@@ -74,6 +78,23 @@ export const api = {
     invoke<boolean>('merge_rollback', { taskId, targetPath }),
   mergeRestoreShelf: (taskId: string, targetPath: string) =>
     invoke<boolean>('merge_restore_shelf', { taskId, targetPath }),
+
+  // 手动搁置；paths 非空时只搁置这些文件
+  shelfCreate: (path: string, name: string, paths?: string[]) =>
+    invoke<ShelfEntry>('shelf_create', { path, name, paths }),
+  shelfList: (path?: string) => invoke<ShelfEntry[]>('shelf_list', { path }),
+  shelfApply: (id: string) => invoke<string>('shelf_apply', { id }),
+  shelfDelete: (id: string) => invoke<void>('shelf_delete', { id }),
+
+  // 回滚提交（反向合并，不自动提交）
+  rollbackRevision: (path: string, revision: number, autoShelve: boolean) =>
+    invoke<RollbackResult>('svn_rollback_revision', { path, revision, autoShelve }),
+
+  // 冲突处理
+  conflictDetails: (path: string) =>
+    invoke<ConflictDetails>('conflict_get_details', { path }),
+  conflictResolve: (path: string, accept: ConflictAccept, content?: string) =>
+    invoke<void>('conflict_resolve', { path, accept, content }),
 
   // 增量打包
   packageFetchRevisions: (restPath: string, limit?: number) =>

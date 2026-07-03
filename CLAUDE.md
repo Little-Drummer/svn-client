@@ -83,6 +83,9 @@ src-tauri/src/
 | `package.rs` | 增量打包：log -v 提取变更、java→class 映射、版本文件、zip |
 | `preset.rs` | 本地开发配置文件预设（捕获/预览/应用） |
 | `project.rs` | 按 `work/{项目}/{环境}/{模块}` 启发式分组工作副本、扫描批量添加 |
+| `shelve.rs` | 手动搁置（类似 git stash）：补丁保存/列表/恢复/删除；共享 wc_status_text / has_versioned_changes 给 merge 和 rollback |
+| `conflict.rs` | 文本冲突三方内容读取（svn info --xml 的 conflict 节点）、svn resolve |
+| `rollback.rs` | 回滚提交：反向合并指定 revision，脏副本先走搁置 |
 
 ### 前端视图与 Tab 对应
 
@@ -133,9 +136,9 @@ MainLayout 顶部 Tab：总览（WorkflowBoardView）/ 状态（StatusView）/ �
 
 ## 已知风险（改动相关模块前必读）
 
-- **merge 的 commit 是对整个 target 工作副本提交**：非 sync 路由若 target 有预存改动会被一并提交。计划加合并前脏检查防护，改 `merge.rs` 时注意不要破坏搁置恢复链路。
-- **merge / package 全流程尚未在真实项目 runtime 实测**，只有编译和构建验证。
-- 合并/打包逻辑移植自两个 Python 脚本（`~/.hermes/skills/devops/svn-merge-code`、`svn-incremental-package`），脚本是公司约定的权威参照，修改对应逻辑时逐函数对照脚本，不凭记忆重写。
+- **合并的脏副本防护链路**：merge_execute 前自动搁置 target 版本化修改（二进制拒绝）→ update → merge → 用户检查后提交 → 自动恢复搁置，另有撤销合并入口。改 `merge.rs` 或 `shelve.rs` 时不要破坏这条链路（搁置目录：`app_config_dir/shelves/{会话id}`，手动搁置在 `shelves/manual/{id}`）。
+- 合并/打包逻辑移植自两个 Python 脚本（`~/.hermes/skills/devops/svn-merge-code`、`svn-incremental-package`），脚本是公司约定的权威参照，修改对应逻辑时逐函数对照脚本，不凭记忆重写。多级合并与增量打包已在真实项目实测正常（2026-07-03）。
+- 冲突处理 / 手动搁置 / 回滚提交（2026-07-03 落地）尚未在真实场景 runtime 实测。
 
 ## 代码风格
 

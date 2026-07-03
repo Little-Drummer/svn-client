@@ -37,6 +37,17 @@ const dialog = useConfirmDialog()
   </Dialog>
 </template>
 
+<style>
+/* 确认框会叠加在其他弹窗（搁置、冲突解决等）之上打开，必须始终处于最顶层；
+   普通弹窗 overlay/content 为 50/51，这里整体抬高一档 */
+.dialog-content.confirm-dialog {
+  z-index: 61;
+}
+.dialog-overlay:has(+ .confirm-dialog) {
+  z-index: 60;
+}
+</style>
+
 <style scoped>
 .confirm-dialog {
   width: min(520px, calc(100vw - 32px));

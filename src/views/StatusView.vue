@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import {
+  Archive,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
@@ -13,6 +14,7 @@ import {
   FolderOpen,
   FolderPlus,
   FolderSearch,
+  GitMerge,
   Plus,
   RefreshCw,
   ScrollText,
@@ -41,6 +43,8 @@ import { confirm } from '@/composables/use-confirm-dialog'
 import DiffViewer from '../components/DiffViewer.vue'
 import CommitPanel from '../components/CommitPanel.vue'
 import UpdatePanel from '../components/UpdatePanel.vue'
+import ShelvesDialog from '../components/ShelvesDialog.vue'
+import ConflictDialog from '../components/ConflictDialog.vue'
 
 import { api } from '../api/svn'
 import { useStatusStore } from '../stores/status'
@@ -170,6 +174,14 @@ const checkedUnversionedPaths = computed(() =>
   checkedCommittablePaths.value.filter(
     (path) => statusStore.entries.find((entry) => entry.path === path)?.item === 'unversioned',
   ),
+)
+// 可搁置的状态：svn diff 能完整保存的版本化修改（未跟踪/冲突/缺失不参与）
+const SHELVABLE = new Set(['modified', 'added', 'deleted', 'replaced'])
+const checkedShelvablePaths = computed(() =>
+  [...checkedPaths.value].filter((path) => {
+    const entry = statusStore.entries.find((e) => e.path === path)
+    return entry ? SHELVABLE.has(entry.item) : false
+  }),
 )
 const statusByPath = computed(() => {
   const map = new Map<string, SvnStatusEntry>()
@@ -876,6 +888,11 @@ async function ignoreSelected() {
   }
 }
 
+// ============ 搁置与冲突解决 ============
+const showShelves = ref(false)
+const conflictOpen = ref(false)
+const conflictPath = ref<string | null>(null)
+
 // ============ 右键上下文菜单 ============
 const ctxOpen = ref(false)
 const ctxX = ref(0)
@@ -915,6 +932,9 @@ const ctxItems = computed<ContextMenuItem[]>(() => {
   const list: ContextMenuItem[] = [
     { key: 'diff', label: '查看差异', icon: Eye },
   ]
+  if (item === 'conflicted') {
+    list.unshift({ key: 'resolve', label: '解决冲突', icon: GitMerge })
+  }
   if (item === 'unversioned') {
     list.push({ key: 'add', label: '加入版本控制', icon: Plus })
     list.push({ key: 'ignore', label: '加入忽略', icon: EyeOff })
@@ -935,6 +955,10 @@ async function onCtxSelect(key: string) {
   const path = ctxPath.value
   if (!path) return
   switch (key) {
+    case 'resolve':
+      conflictPath.value = path
+      conflictOpen.value = true
+      break
     case 'diff': {
       // 选中该文件并滑出 diff，交给既有的 selectedFile 监听加载内容
       openFileDiff(
@@ -1081,6 +1105,15 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
           @click="openUpdate"
         >
           更新
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          class="toolbar-action"
+          @click="showShelves = true"
+        >
+          <Archive class="icon-xs" />
+          搁置
         </Button>
         <span class="tool-sep" />
         <Switch :model-value="statusStore.showUnversioned" @update:model-value="onToggleUnversioned" />
@@ -1338,6 +1371,18 @@ async function runSinglePathAction(action: () => Promise<unknown>, errMsg: strin
       :y="blankCtxY"
       :items="blankCtxItems"
       @select="onBlankCtxSelect"
+    />
+
+    <ShelvesDialog
+      v-model:open="showShelves"
+      :working-copy="workingCopy"
+      :checked-paths="checkedShelvablePaths"
+      @changed="reload"
+    />
+    <ConflictDialog
+      v-model:open="conflictOpen"
+      :path="conflictPath"
+      @resolved="reload"
     />
   </div>
 </template>

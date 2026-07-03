@@ -8,6 +8,7 @@ use crate::models::{MergeRouteConfig, Project, ProjectModule};
 use crate::svn::info::svn_info;
 use crate::svn::log::{svn_log, LogOptions};
 use crate::svn::runner::run_svn;
+use crate::svn::shelve::{has_versioned_changes, wc_status_text};
 use crate::svn::streaming::{run_svn_streaming, StreamLine};
 
 // 合并涉及的模块（与脚本 MERGE_MODULES 一致）
@@ -511,23 +512,6 @@ pub fn build_preview(
 }
 
 // ---------- 执行流程 ----------
-
-fn wc_status_text(svn_bin: &str, path: &str) -> String {
-    run_svn(svn_bin, &["status", path])
-        .map(|o| o.stdout.trim().to_string())
-        .unwrap_or_default()
-}
-
-// 是否存在版本化修改（首列不是 ? / I / X）
-fn has_versioned_changes(status: &str) -> bool {
-    status.lines().any(|line| {
-        let trimmed = line.trim_end();
-        if trimmed.trim().is_empty() {
-            return false;
-        }
-        !matches!(trimmed.chars().next(), Some('?') | Some('I') | Some('X'))
-    })
-}
 
 fn run_step<F: FnMut(StreamLine)>(svn_bin: &str, args: &[&str], on_line: &mut F) -> bool {
     match run_svn_streaming(svn_bin, args, |l| on_line(l)) {

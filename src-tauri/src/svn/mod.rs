@@ -1,3 +1,4 @@
+pub mod conflict;
 pub mod diff;
 pub mod info;
 pub mod list;
@@ -6,6 +7,8 @@ pub mod merge;
 pub mod package;
 pub mod preset;
 pub mod project;
+pub mod rollback;
 pub mod runner;
+pub mod shelve;
 pub mod status;
 pub mod streaming;

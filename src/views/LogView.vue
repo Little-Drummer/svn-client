@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw } from 'lucide-vue-next'
+import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw, Undo2 } from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -8,13 +8,16 @@ import { Input } from '@/components/ui/input'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
 import DiffViewer from '../components/DiffViewer.vue'
-import { api } from '../api/svn'
+import { api, describeError } from '../api/svn'
+import { confirm } from '@/composables/use-confirm-dialog'
+import { useAppToast } from '../composables/use-app-toast'
 import { useErrorToast } from '../composables/use-error-toast'
 import { createGeneration } from '../composables/use-request-generation'
 import type { LogTarget, SvnLogEntry, SvnLogPath } from '../types/svn'
 
 const props = defineProps<{ target: LogTarget }>()
 const toast = useErrorToast()
+const appToast = useAppToast()
 
 const entries = ref<SvnLogEntry[]>([])
 const loading = ref(false)
@@ -164,6 +167,56 @@ async function openFileDiff(rev: number, p: SvnLogPath) {
   }
 }
 
+// ============ 回滚提交（反向合并） ============
+const rollingBack = ref(false)
+
+async function rollbackCommit(e: SvnLogEntry) {
+  if (props.target.kind !== 'wc' || rollingBack.value) return
+  const rev = e.revision
+  const ok = await confirm({
+    title: `回滚 r${rev}`,
+    content:
+      `将以反向合并撤销该提交的改动，等价命令：\nsvn merge -c -${rev} <仓库URL> ${props.target.target}\n\n` +
+      '改动只落在工作副本，不会自动提交；完成后请到「状态」页检查并提交。',
+    confirmText: '执行回滚',
+    destructive: true,
+  })
+  if (!ok) return
+  rollingBack.value = true
+  try {
+    let result
+    try {
+      result = await api.rollbackRevision(props.target.target, rev, false)
+    } catch (err) {
+      // 工作副本不干净时后端会拒绝，引导用户先自动搁置再重试
+      if (!describeError(err).includes('未提交修改')) throw err
+      const shelve = await confirm({
+        title: '工作副本有未提交修改',
+        content:
+          '回滚需要干净的工作副本。可以先自动搁置本地修改（回滚后在「状态 → 搁置」中恢复），或取消本次回滚。',
+        confirmText: '自动搁置并回滚',
+        destructive: true,
+      })
+      if (!shelve) return
+      result = await api.rollbackRevision(props.target.target, rev, true)
+    }
+    if (result.conflicted) {
+      appToast.warning(`回滚 r${rev} 产生冲突`, '请到「状态」页解决冲突后再提交')
+    } else {
+      appToast.success(
+        `已回滚 r${rev}`,
+        result.shelf
+          ? `本地修改已搁置：${result.shelf.name}；请到「状态」页检查并提交`
+          : '请到「状态」页检查并提交',
+      )
+    }
+  } catch (err) {
+    toast(err, '回滚失败')
+  } finally {
+    rollingBack.value = false
+  }
+}
+
 function backToList() {
   fileDiff.value = null
 }
@@ -260,6 +313,18 @@ function actionClass(a: string) {
           </button>
 
           <div v-if="expanded.has(e.revision)" class="commit-body">
+            <div v-if="target.kind === 'wc'" class="commit-actions">
+              <Button
+                size="xs"
+                variant="ghost"
+                class="rollback-btn"
+                :disabled="rollingBack"
+                @click="rollbackCommit(e)"
+              >
+                <Undo2 class="icon-xs" />
+                {{ rollingBack ? '回滚中…' : '回滚此提交' }}
+              </Button>
+            </div>
             <div v-if="hasMoreLines(e.message)" class="full-msg">{{ e.message }}</div>
             <EmptyState v-if="e.paths.length === 0" description="该版本无文件变更" />
             <div
@@ -446,6 +511,19 @@ function actionClass(a: string) {
 .commit-body {
   padding: 2px 14px 10px 38px;
   background: color-mix(in srgb, var(--fg) 2%, transparent);
+}
+.commit-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 0 2px;
+}
+.rollback-btn {
+  color: var(--warning, var(--fg-muted));
+  font-size: var(--fs-caption);
+}
+.icon-xs {
+  width: 12px;
+  height: 12px;
 }
 .full-msg {
   margin: 4px 0 8px;

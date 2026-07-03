@@ -30,6 +30,9 @@
 - Update / Checkout：指定 revision、流式进度、任务中心统一管理（task_id 事件流、可取消）。
 - Log：limit/revision range/作者/日期/关键词筛选、变更文件、关联 diff。
 - 环境：svn 检测与引导、macOS 自动探测 svn 路径、自定义二进制路径。
+- 冲突处理（`svn/conflict.rs` + ConflictDialog）：mine/theirs 三方内容读取、Monaco 双方对比、直接编辑冲突文件、采用我的/对方快速解决、标记 resolved；树冲突明确提示走命令行。
+- 手动搁置（`svn/shelve.rs` + ShelvesDialog）：类似 git stash，把版本化修改存为补丁并还原工作区，支持列表/恢复/删除；二进制修改拒绝搁置。状态页工具栏入口。
+- 回滚提交（`svn/rollback.rs` + LogView）：反向合并撤销指定 revision，工作副本不干净时引导自动搁置，改动留在副本待检查提交，不自动提交。
 
 **团队工作流套件（全部落地）**
 
@@ -41,24 +44,23 @@
 
 ### 已知风险 / 未验证项 ⚠️
 
-- merge 的 commit 提交整个 target 工作副本，非 sync 路由下 target 预存改动会被带上（缺脏检查防护）。
-- merge / package 全流程仅通过编译和构建验证，**未在真实项目 runtime 实测**。
-- 仓库凭据存储未接系统 Keychain。
+- 合并流程有完整的脏副本防护：执行前自动搁置 target 版本化修改（二进制拒绝）、提交后恢复搁置、随时可撤销合并。多级合并与增量打包已在真实项目实测正常（2026-07-03 确认）。
+- 冲突处理、手动搁置、回滚提交为 2026-07-03 新落地，编译与构建通过，**尚未在真实冲突/回滚场景 runtime 实测**。
 
 ### 未实现 ❌
 
-冲突处理（resolve / 三方视图）、分支管理（switch / 创建分支 tag / 分支对比）、Blame、SVN Properties 通用查看编辑（仅有 ignore 特例）、独立搁置功能、回滚提交、补丁导入导出、锁管理、Externals 管理、文件变动自动刷新、Windows svn 路径探测。
+补丁导入导出、锁管理、Externals 管理、文件变动自动刷新、Windows svn 路径探测。
+
+### 暂不做（2026-07-03 用户决策）
+
+- **switch / 分支管理**：用户工作流是 develop/test/produce 各自独立工作副本目录，没有原地切换分支的需求。
+- **Blame / SVN Properties**：Blame 由 IDE（IDEA Annotate）覆盖；项目未使用 externals。
+- **凭据接入 Keychain**：单人内网环境，风险可控，不急。
 
 ## 路线图（按优先级）
 
-1. **真实项目验证合并 / 打包流程**，并给 merge 加 target 脏检查防护（不干净时强制搁置或阻断）。
-2. **冲突处理**：冲突文件列表、mine / theirs / base 三方信息、Monaco 合并视图、标记 resolved、mine/theirs 快速解决。commit 前已能检出冲突，但用户目前只能回终端解决，这是工作流最后的断点。
-3. **分支管理**：`svn switch`、`svn copy` 创建分支/tag、两分支对比。多级合并已在用分支概念，切换却要回命令行。
-4. **低成本高收益项**：
-   - 搁置独立功能化——merge.rs 已有完整 shelve/restore 实现，抽出来暴露成用户可用的"暂存改动"。
-   - 回滚提交——Log 中选 revision 一键 reverse merge（`svn merge -c -REV`），复用危险操作确认机制。
-5. **补全**：Blame / Annotate（Monaco 行级标注）、SVN Properties（至少 svn:ignore、svn:externals 可视化）、凭据接入 Keychain（`keyring` crate）。
-6. **体验与健壮性**：
+1. **新功能真实场景验证**：冲突处理、手动搁置、回滚提交在真实项目上走一遍（制造冲突 → 界面解决；搁置 → 恢复；回滚一笔历史提交）。
+2. **体验与健壮性**：
    - notify crate 监听工作副本自动刷新 status（防抖 + 过滤 `.svn`）。
    - 提交消息历史 / 公司格式模板。
    - 长任务完成系统通知（tauri-plugin-notification 已装未用）。

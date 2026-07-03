@@ -43,11 +43,14 @@
 - `svn status --xml` 展示 modified / added / deleted / conflicted / unversioned / missing 等状态，支持流式加载。
 - 批量 `add` / `delete` / `revert` / `ignore`，危险操作有确认。
 - `svn cleanup` 修复锁死的工作副本。
+- **冲突处理**：冲突文件右键"解决冲突"，Monaco 对比我的/对方版本、直接编辑冲突文件，支持采用我的 / 采用对方 / 编辑后标记已解决。
+- **搁置改动**：类似 git stash，把当前版本化修改存为补丁并还原工作区，随时恢复或删除（二进制修改拒绝搁置以防丢失）。
 
 ### Diff 与历史
 
 - Monaco Editor 展示本地改动、任意 revision 的 diff，支持查看 BASE 与历史版本内容。
 - `svn log --xml` 提交历史：limit、revision range、作者、日期、关键词筛选，展示变更文件并可查看对应 diff。
+- **回滚提交**：历史里选中 revision 一键反向合并撤销，改动留在工作副本待检查提交；副本不干净时引导先自动搁置。
 
 ### Commit / Update / Checkout
 
@@ -134,12 +137,11 @@ npm run tauri build  # 生成桌面安装包
 
 按优先级排序：
 
-1. **合并 / 打包流程在真实项目上的验证**，以及合并前目标副本脏检查防护。
-2. **冲突处理**：mine / theirs / base 三方视图、Monaco 合并编辑、标记 resolved。
-3. **分支管理**：switch、创建分支 / tag、分支对比。
-4. **搁置（shelve）独立功能** 与 **回滚提交**（reverse merge）。
-5. Blame / Annotate、SVN Properties 查看编辑、凭据接入系统 Keychain。
-6. 体验增强：文件变动自动刷新状态、提交消息历史、补丁导入导出、长任务系统通知、Windows svn 路径自动探测。
+1. 冲突处理、搁置、回滚提交在真实场景的使用验证。
+2. 体验增强：文件变动自动刷新状态、提交消息历史、补丁导入导出、长任务系统通知、Windows svn 路径自动探测。
+3. svn XML 解析与合并核心逻辑的单元测试。
+
+暂不做：switch/分支管理（工作流用独立副本目录）、Blame / Properties（IDE 已覆盖）、凭据 Keychain（单人内网环境）。
 
 ## 贡献约定
 

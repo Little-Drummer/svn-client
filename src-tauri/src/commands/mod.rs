@@ -10,6 +10,7 @@ use crate::models::{
 };
 use crate::process::{spawn_merge_task, spawn_status_stream, spawn_svn_task, ProcessRegistry};
 use crate::storage::ConfigState;
+use crate::svn::conflict::{conflict_details, resolve_conflict, ConflictDetails};
 use crate::svn::diff::{svn_cat_base, svn_cat_revision, svn_diff_file, svn_diff_revision};
 use crate::svn::info::svn_info;
 use crate::svn::list::{
@@ -25,7 +26,9 @@ use crate::svn::package::{
     PackageOptions, PackageRevision, PackageZipResult,
 };
 use crate::svn::project::{group_working_copies, scan_project_dir};
+use crate::svn::rollback::{rollback_revision, RollbackResult};
 use crate::svn::runner::{check_svn_version, run_svn};
+use crate::svn::shelve::{apply_shelf, create_shelf, delete_shelf, list_shelves, ShelfEntry};
 use crate::svn::status::{svn_status, svn_status_verbose_all, svn_status_with_updates};
 
 // ---------- 环境检查 ----------
@@ -585,6 +588,15 @@ pub async fn merge_preview(
         .map_err(|e| AppError::Other(format!("生成合并预览任务失败: {e}")))
 }
 
+// 搁置补丁统一放在配置目录下的 shelves 里（合并会话 + 手动搁置共用根目录）
+fn shelves_dir_of(state: &ConfigState) -> AppResult<std::path::PathBuf> {
+    state
+        .config_path
+        .parent()
+        .map(|path| path.join("shelves"))
+        .ok_or_else(|| AppError::Other("无法定位搁置目录".into()))
+}
+
 /// 自动搁置目标已有修改，再执行 update → merge；提交由用户另行确认。
 #[tauri::command]
 pub fn merge_execute(
@@ -597,11 +609,7 @@ pub fn merge_execute(
         return Err(AppError::Other("没有选择任何版本".into()));
     }
     let bin = state.svn_bin();
-    let shelves_dir = state
-        .config_path
-        .parent()
-        .map(|path| path.join("shelves"))
-        .ok_or_else(|| AppError::Other("无法定位搁置目录".into()))?;
+    let shelves_dir = shelves_dir_of(&state)?;
     spawn_merge_task(app, bin, route, revisions, shelves_dir)
 }
 
@@ -613,11 +621,7 @@ pub fn merge_rollback(
     target_path: String,
 ) -> AppResult<bool> {
     let bin = state.svn_bin();
-    let shelves_dir = state
-        .config_path
-        .parent()
-        .map(|path| path.join("shelves"))
-        .ok_or_else(|| AppError::Other("无法定位搁置目录".into()))?;
+    let shelves_dir = shelves_dir_of(&state)?;
     rollback_merge(&bin, target_path.trim(), &shelves_dir, task_id.trim())
 }
 
@@ -629,12 +633,100 @@ pub fn merge_restore_shelf(
     target_path: String,
 ) -> AppResult<bool> {
     let bin = state.svn_bin();
-    let shelves_dir = state
-        .config_path
-        .parent()
-        .map(|path| path.join("shelves"))
-        .ok_or_else(|| AppError::Other("无法定位搁置目录".into()))?;
+    let shelves_dir = shelves_dir_of(&state)?;
     restore_merge_shelf(&bin, target_path.trim(), &shelves_dir, task_id.trim())
+}
+
+// ---------- 手动搁置 ----------
+
+/// 把工作副本的版本化修改搁置为补丁并还原工作区；paths 非空时只搁置这些文件。
+#[tauri::command]
+pub async fn shelf_create(
+    state: State<'_, ConfigState>,
+    path: String,
+    name: String,
+    paths: Option<Vec<String>>,
+) -> AppResult<ShelfEntry> {
+    let bin = state.svn_bin();
+    let dir = shelves_dir_of(&state)?;
+    let paths = paths.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        create_shelf(&bin, path.trim(), &name, &paths, &dir)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("搁置任务失败: {e}")))?
+}
+
+/// 列出手动搁置，可按工作副本路径过滤。
+#[tauri::command]
+pub fn shelf_list(state: State<ConfigState>, path: Option<String>) -> AppResult<Vec<ShelfEntry>> {
+    let dir = shelves_dir_of(&state)?;
+    list_shelves(&dir, path.as_deref())
+}
+
+/// 应用搁置补丁到其来源工作副本，返回 svn patch 输出；应用成功后保留记录。
+#[tauri::command]
+pub async fn shelf_apply(state: State<'_, ConfigState>, id: String) -> AppResult<String> {
+    let bin = state.svn_bin();
+    let dir = shelves_dir_of(&state)?;
+    tauri::async_runtime::spawn_blocking(move || apply_shelf(&bin, &dir, id.trim()))
+        .await
+        .map_err(|e| AppError::Other(format!("恢复搁置任务失败: {e}")))?
+}
+
+#[tauri::command]
+pub fn shelf_delete(state: State<ConfigState>, id: String) -> AppResult<()> {
+    let dir = shelves_dir_of(&state)?;
+    delete_shelf(&dir, id.trim())
+}
+
+// ---------- 回滚提交 ----------
+
+/// 反向合并撤销一笔提交，改动保留在工作副本待检查提交。
+#[tauri::command]
+pub async fn svn_rollback_revision(
+    state: State<'_, ConfigState>,
+    path: String,
+    revision: u64,
+    auto_shelve: bool,
+) -> AppResult<RollbackResult> {
+    let bin = state.svn_bin();
+    let dir = shelves_dir_of(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        rollback_revision(&bin, path.trim(), revision, auto_shelve, &dir)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("回滚任务失败: {e}")))?
+}
+
+// ---------- 冲突处理 ----------
+
+/// 读取文本冲突的三方内容和当前工作文件内容。
+#[tauri::command]
+pub async fn conflict_get_details(
+    state: State<'_, ConfigState>,
+    path: String,
+) -> AppResult<ConflictDetails> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || conflict_details(&bin, path.trim()))
+        .await
+        .map_err(|e| AppError::Other(format!("读取冲突详情任务失败: {e}")))?
+}
+
+/// 标记冲突已解决；content 提供时先把编辑结果写回文件（仅限 working 方式）。
+#[tauri::command]
+pub async fn conflict_resolve(
+    state: State<'_, ConfigState>,
+    path: String,
+    accept: String,
+    content: Option<String>,
+) -> AppResult<()> {
+    let bin = state.svn_bin();
+    tauri::async_runtime::spawn_blocking(move || {
+        resolve_conflict(&bin, path.trim(), accept.trim(), content.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("解决冲突任务失败: {e}")))?
 }
 
 // ---------- 本地开发配置预设 ----------

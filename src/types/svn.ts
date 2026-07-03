@@ -107,6 +107,41 @@ export interface PresetApplyPlan {
   newLines: string[]
 }
 
+// 手动搁置记录，与后端 ShelfEntry 对应
+export interface ShelfEntry {
+  id: string
+  name: string
+  wcPath: string
+  createdAt: string
+  fileCount: number
+  statusText: string
+}
+
+// 回滚提交结果，与后端 RollbackResult 对应
+export interface RollbackResult {
+  output: string
+  conflicted: boolean
+  shelf?: ShelfEntry | null
+}
+
+// 文本冲突三方内容，与后端 ConflictDetails 对应
+export interface ConflictDetails {
+  path: string
+  workingContent: string
+  mineContent?: string | null
+  theirsContent?: string | null
+  baseContent?: string | null
+}
+
+// svn resolve --accept 的取值
+export type ConflictAccept =
+  | 'working'
+  | 'mine-full'
+  | 'theirs-full'
+  | 'base'
+  | 'mine-conflict'
+  | 'theirs-conflict'
+
 // 增量打包，与后端 package.rs 对应
 export interface PackageOptions {
   requirementName: string
