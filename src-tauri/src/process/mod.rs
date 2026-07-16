@@ -265,26 +265,19 @@ pub fn spawn_merge_task(
     thread::spawn(move || {
         let tid = task_id_thread.clone();
         let app_lines = app_thread.clone();
-        let success = run_merge_flow(
-            &svn_bin,
-            &route,
-            &revisions,
-            &shelves_dir,
-            &tid,
-            |line| {
-                let event = match line {
-                    StreamLine::Stdout(s) => TaskEvent::Stdout {
-                        task_id: tid.clone(),
-                        line: s,
-                    },
-                    StreamLine::Stderr(s) => TaskEvent::Stderr {
-                        task_id: tid.clone(),
-                        line: s,
-                    },
-                };
-                let _ = app_lines.emit(TASK_EVENT_NAME, event);
-            },
-        );
+        let success = run_merge_flow(&svn_bin, &route, &revisions, &shelves_dir, &tid, |line| {
+            let event = match line {
+                StreamLine::Stdout(s) => TaskEvent::Stdout {
+                    task_id: tid.clone(),
+                    line: s,
+                },
+                StreamLine::Stderr(s) => TaskEvent::Stderr {
+                    task_id: tid.clone(),
+                    line: s,
+                },
+            };
+            let _ = app_lines.emit(TASK_EVENT_NAME, event);
+        });
 
         let _ = app_thread.emit(
             TASK_EVENT_NAME,

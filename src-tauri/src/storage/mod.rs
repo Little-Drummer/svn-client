@@ -28,11 +28,16 @@ pub struct ConfigState {
 
 impl ConfigState {
     pub fn svn_bin(&self) -> String {
-        self.config
+        let configured = self
+            .config
             .lock()
             .ok()
             .and_then(|c| c.svn_bin.clone())
-            .unwrap_or_else(default_svn_bin)
+            .map(|path| path.trim().to_string())
+            // 历史配置里的裸 svn 在 macOS GUI 启动时也可能失效，按未配置处理。
+            .filter(|path| !path.is_empty() && path != "svn");
+
+        configured.unwrap_or_else(default_svn_bin)
     }
 
     pub fn save(&self) -> AppResult<()> {

@@ -90,8 +90,8 @@ pub fn conflict_details(svn_bin: &str, path: &str) -> AppResult<ConflictDetails>
         .ok_or_else(|| AppError::Other("该文件当前没有文本冲突".into()))?;
 
     let file = Path::new(path);
-    let working_content = fs::read(file)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())?;
+    let working_content =
+        fs::read(file).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())?;
 
     Ok(ConflictDetails {
         path: path.to_string(),
@@ -123,10 +123,15 @@ pub fn resolve_conflict(
     }
     if let Some(text) = content {
         if accept != "working" {
-            return Err(AppError::Other("自定义内容只能配合 working 方式使用".into()));
+            return Err(AppError::Other(
+                "自定义内容只能配合 working 方式使用".into(),
+            ));
         }
         fs::write(path, text)?;
     }
-    run_svn(svn_bin, &["resolve", "--accept", accept, "--non-interactive", path])?;
+    run_svn(
+        svn_bin,
+        &["resolve", "--accept", accept, "--non-interactive", path],
+    )?;
     Ok(())
 }

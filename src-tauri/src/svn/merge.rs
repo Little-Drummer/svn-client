@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 use crate::errors::AppResult;
 use crate::models::{MergeRouteConfig, Project, ProjectModule};
@@ -557,10 +557,12 @@ fn shelve_target(
 
     fs::write(shelf_dir.join("status.txt"), format!("{status}\n"))
         .map_err(|e| format!("写入搁置状态失败：{e}"))?;
-    let diff = run_svn(svn_bin, &["diff", target])
-        .map_err(|e| format!("生成搁置补丁失败：{e}"))?;
+    let diff = run_svn(svn_bin, &["diff", target]).map_err(|e| format!("生成搁置补丁失败：{e}"))?;
     // 二进制修改无法由 svn diff 完整保存，禁止继续清理以避免本地内容丢失
-    if diff.stdout.contains("Cannot display: file marked as a binary type") {
+    if diff
+        .stdout
+        .contains("Cannot display: file marked as a binary type")
+    {
         return Err("目标工作副本包含二进制修改，无法安全自动搁置，请先单独处理".into());
     }
     if diff.stdout.trim().is_empty() {
@@ -569,7 +571,10 @@ fn shelve_target(
     fs::write(shelf_dir.join("changes.patch"), diff.stdout)
         .map_err(|e| format!("写入搁置补丁失败：{e}"))?;
 
-    info(on_line, format!("已搁置目标工作副本修改：{}", shelf_dir.display()));
+    info(
+        on_line,
+        format!("已搁置目标工作副本修改：{}", shelf_dir.display()),
+    );
     if !run_step(svn_bin, &["revert", "-R", target], on_line) {
         return Err("清理目标工作副本失败，搁置补丁已保留".into());
     }
@@ -617,7 +622,8 @@ pub fn rollback_merge(
     }
     let before_revert = wc_status_text(svn_bin, target);
     let original_status = fs::read_to_string(shelf_dir.join("status.txt")).unwrap_or_default();
-    let original_added: HashSet<String> = added_status_paths(&original_status).into_iter().collect();
+    let original_added: HashSet<String> =
+        added_status_paths(&original_status).into_iter().collect();
     let merge_added = added_status_paths(&before_revert);
     run_svn(svn_bin, &["revert", "-R", target])?;
     // svn revert 不会删除原本处于 added 状态的实体文件，需清理本次合并新增项
@@ -702,13 +708,19 @@ pub fn run_merge_flow<F: FnMut(StreamLine)>(
     }
 
     let status = wc_status_text(svn_bin, target);
-    if status.lines().any(|line| line.chars().take(7).any(|ch| ch == 'C')) {
+    if status
+        .lines()
+        .any(|line| line.chars().take(7).any(|ch| ch == 'C'))
+    {
         on_line(StreamLine::Stderr(
             "检测到合并冲突，可撤销本次合并并恢复搁置文件。".into(),
         ));
         return false;
     }
 
-    info(&mut on_line, "合并完成，变更已保留在目标工作副本，请检查后单独提交。");
+    info(
+        &mut on_line,
+        "合并完成，变更已保留在目标工作副本，请检查后单独提交。",
+    );
     true
 }

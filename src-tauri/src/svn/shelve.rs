@@ -91,13 +91,18 @@ pub fn create_shelf(
     diff_args.extend(&targets);
     let diff = run_svn(svn_bin, &diff_args)?;
     // 二进制修改无法由 svn diff 完整保存，禁止继续以避免本地内容丢失
-    if diff.stdout.contains("Cannot display: file marked as a binary type") {
+    if diff
+        .stdout
+        .contains("Cannot display: file marked as a binary type")
+    {
         return Err(AppError::Other(
             "包含二进制修改，无法安全搁置，请先单独处理二进制文件".into(),
         ));
     }
     if diff.stdout.trim().is_empty() {
-        return Err(AppError::Other("未能生成有效补丁，已保留工作副本修改".into()));
+        return Err(AppError::Other(
+            "未能生成有效补丁，已保留工作副本修改".into(),
+        ));
     }
 
     let id = Uuid::new_v4().to_string();
@@ -114,7 +119,10 @@ pub fn create_shelf(
         },
         wc_path: wc_path.to_string(),
         created_at: Local::now().to_rfc3339(),
-        file_count: status.lines().filter(|l| is_versioned_change_line(l)).count(),
+        file_count: status
+            .lines()
+            .filter(|l| is_versioned_change_line(l))
+            .count(),
         status_text: status.clone(),
     };
     fs::write(dir.join("changes.patch"), &diff.stdout)?;
