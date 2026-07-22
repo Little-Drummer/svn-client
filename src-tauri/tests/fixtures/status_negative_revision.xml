@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<status>
+  <target path="/Volumes/macData/work/北京市属机关/develop/updatesql">
+    <entry path="/Volumes/macData/work/北京市属机关/develop/updatesql/【需求】【ID1011539】著录档案不在值域范围内不可保存.sql">
+      <wc-status item="missing" revision="-1" props="none">
+        <commit revision="140817">
+          <author>wangjingan</author>
+          <date>2026-06-03T07:00:21.943212Z</date>
+        </commit>
+      </wc-status>
+    </entry>
+    <entry path="/Volumes/macData/work/北京市属机关/develop/updatesql/档案库按钮可按角色配置-resource_info扩字段.sql">
+      <wc-status props="none" item="unversioned">
+      </wc-status>
+    </entry>
+  </target>
+</status>
