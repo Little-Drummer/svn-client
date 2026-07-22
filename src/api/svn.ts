@@ -20,6 +20,7 @@ import type {
   SvnInfo,
   SvnLogEntry,
   SvnStatusEntry,
+  UnversionedTreeEntry,
   RepositoryEntry,
   RemoteListEntry,
   WorkingCopyEntry,
@@ -124,6 +125,8 @@ export const api = {
   info: (path: string) => invoke<SvnInfo>('svn_get_info', { path }),
   status: (path: string, showUnversioned = true, showIgnored = false) =>
     invoke<SvnStatusEntry[]>('svn_get_status', { path, showUnversioned, showIgnored }),
+  listUnversionedTree: (paths: string[]) =>
+    invoke<UnversionedTreeEntry[]>('list_unversioned_tree', { paths }),
   statusSummary: (path: string) =>
     invoke<WorkingCopyStatusSummary>('svn_get_status_summary', { path }),
   statusStream: (path: string, showUnversioned = true, showIgnored = false, requestId: string) =>

@@ -5,8 +5,8 @@ use uuid::Uuid;
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     CapturePresetFile, ConfigPreset, MergeRouteConfig, PresetApplyPlan, Project, RemoteListEntry,
-    RepositoryEntry, SvnInfo, SvnLogEntry, SvnStatusEntry, WorkingCopyEntry, WorkingCopyFileEntry,
-    WorkingCopyStatusSummary,
+    RepositoryEntry, SvnInfo, SvnLogEntry, SvnStatusEntry, UnversionedTreeEntry, WorkingCopyEntry,
+    WorkingCopyFileEntry, WorkingCopyStatusSummary,
 };
 use crate::process::{spawn_merge_task, spawn_status_stream, spawn_svn_task, ProcessRegistry};
 use crate::storage::ConfigState;
@@ -897,6 +897,82 @@ pub async fn list_working_copy_files(
         .map_err(|e| AppError::Other(format!("文件树遍历任务失败: {e}")))?
 }
 
+/// 递归读取 SVN 只报告目录节点的未跟踪路径，供本地更改弹窗补充展示其内容。
+#[tauri::command]
+pub async fn list_unversioned_tree(paths: Vec<String>) -> AppResult<Vec<UnversionedTreeEntry>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::collections::HashSet;
+        use std::path::Path;
+
+        fn collect(
+            root_path: &str,
+            path: &Path,
+            depth: usize,
+            result: &mut Vec<UnversionedTreeEntry>,
+        ) -> AppResult<()> {
+            let metadata = match std::fs::symlink_metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(AppError::Io(error)),
+            };
+            let is_dir = metadata.file_type().is_dir();
+            result.push(UnversionedTreeEntry {
+                root_path: root_path.to_string(),
+                path: path.to_string_lossy().to_string(),
+                kind: if is_dir { "dir" } else { "file" }.to_string(),
+                depth,
+            });
+
+            // 不跟随符号链接，避免链接环导致无限递归。
+            if !is_dir {
+                return Ok(());
+            }
+            let mut children = Vec::new();
+            let directory = match std::fs::read_dir(path) {
+                Ok(directory) => directory,
+                // 单个目录无权限时跳过其后代，其他未跟踪目录仍可正常展示。
+                Err(_) => return Ok(()),
+            };
+            for entry in directory.flatten() {
+                let child = entry.path();
+                if child.file_name().and_then(|name| name.to_str()) == Some(".svn") {
+                    continue;
+                }
+                children.push(child);
+            }
+            children.sort_by(|a, b| {
+                a.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .cmp(
+                        &b.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_lowercase(),
+                    )
+            });
+            for child in children {
+                collect(root_path, &child, depth + 1, result)?;
+            }
+            Ok(())
+        }
+
+        let mut result = Vec::new();
+        let mut visited = HashSet::new();
+        for raw_path in paths {
+            let path = raw_path.trim();
+            if path.is_empty() || !visited.insert(path.to_string()) {
+                continue;
+            }
+            collect(path, Path::new(path), 0, &mut result)?;
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("未跟踪目录遍历任务失败: {e}")))?
+}
+
 fn list_working_copy_files_blocking(
     root: String,
     svn_bin: String,
@@ -1065,14 +1141,20 @@ pub async fn svn_get_status_summary(
         let mut uncommitted = 0;
         let mut outdated = 0;
         for entry in entries {
-            let local_props_changed = entry.props.as_deref().unwrap_or("none") != "none";
-            let local_changed = !matches!(entry.item.as_str(), "normal" | "ignored" | "external")
-                || local_props_changed;
+            let local_props_changed =
+                !matches!(entry.props.as_deref().unwrap_or("none"), "normal" | "none");
+            let local_changed = !matches!(
+                entry.item.as_str(),
+                "normal" | "none" | "ignored" | "external"
+            ) || local_props_changed;
             if local_changed {
                 uncommitted += 1;
             }
 
-            let repos_props_changed = entry.repos_props.as_deref().unwrap_or("none") != "none";
+            let repos_props_changed = !matches!(
+                entry.repos_props.as_deref().unwrap_or("none"),
+                "normal" | "none"
+            );
             let repos_changed = entry
                 .repos_item
                 .as_deref()

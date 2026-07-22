@@ -249,6 +249,13 @@ export interface SvnStatusEntry {
   reposProps?: string | null
 }
 
+export interface UnversionedTreeEntry {
+  rootPath: string
+  path: string
+  kind: 'dir' | 'file' | string
+  depth: number
+}
+
 export interface WorkingCopyStatusSummary {
   uncommitted: number
   outdated: number

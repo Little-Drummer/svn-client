@@ -204,6 +204,16 @@ pub struct SvnStatusEntry {
     pub repos_props: Option<String>,
 }
 
+// 未跟踪目录的轻量文件树条目，仅用于在本地更改预览中展开目录内容。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnversionedTreeEntry {
+    pub root_path: String,
+    pub path: String,
+    pub kind: String,
+    pub depth: usize,
+}
+
 // 工作副本侧栏使用的轻量状态统计，避免前端重复解析完整状态列表。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

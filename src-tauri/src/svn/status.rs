@@ -132,14 +132,16 @@ fn entry_to_status_with_options(entry: Entry, include_normal: bool) -> Option<Sv
         .repos_status
         .as_ref()
         .and_then(|status| status.props.clone());
-    let local_normal = wc.item == "normal" && wc.props.as_deref().unwrap_or("none") == "none";
+    // 远端新增但本地尚不存在时，SVN 会把 wc-status.item 标为 none，它不属于本地更改。
+    let local_normal = matches!(wc.item.as_str(), "normal" | "none")
+        && matches!(wc.props.as_deref().unwrap_or("none"), "normal" | "none");
     let remote_normal = repos_item
         .as_deref()
         .map(|item| item == "normal" || item == "none")
         .unwrap_or(true)
         && repos_props
             .as_deref()
-            .map(|props| props == "none")
+            .map(|props| matches!(props, "normal" | "none"))
             .unwrap_or(true);
     if !include_normal && local_normal && remote_normal {
         return None;

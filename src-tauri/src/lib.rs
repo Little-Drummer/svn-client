@@ -124,6 +124,7 @@ pub fn run() {
             commands::apply_config_preset,
             commands::delete_config_preset,
             commands::list_working_copy_files,
+            commands::list_unversioned_tree,
             commands::create_working_copy_folder,
             commands::svn_get_info,
             commands::svn_get_status,
