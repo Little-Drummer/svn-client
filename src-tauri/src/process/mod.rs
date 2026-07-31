@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{StatusStreamEvent, SvnStatusEntry, TaskEvent};
-use crate::svn::merge::{run_merge_flow, MergeRoute};
+use crate::svn::merge::{run_merge_continue_flow, run_merge_flow, MergeRoute};
 use crate::svn::status::svn_status_streaming;
 use crate::svn::streaming::{run_svn_streaming_cancellable, StreamLine};
 
@@ -250,8 +250,12 @@ pub fn spawn_merge_task(
     route: MergeRoute,
     revisions: Vec<u64>,
     shelves_dir: PathBuf,
+    session_id: Option<String>,
 ) -> AppResult<String> {
     let task_id = Uuid::new_v4().to_string();
+    // 首次任务号同时作为会话号；后续批次使用新任务号，但继续复用首次会话现场。
+    let merge_session_id = session_id.unwrap_or_else(|| task_id.clone());
+    let continuing = merge_session_id != task_id;
     let app_thread = app.clone();
 
     let _ = app.emit(
@@ -265,7 +269,7 @@ pub fn spawn_merge_task(
     thread::spawn(move || {
         let tid = task_id_thread.clone();
         let app_lines = app_thread.clone();
-        let success = run_merge_flow(&svn_bin, &route, &revisions, &shelves_dir, &tid, |line| {
+        let emit_line = |line| {
             let event = match line {
                 StreamLine::Stdout(s) => TaskEvent::Stdout {
                     task_id: tid.clone(),
@@ -277,7 +281,26 @@ pub fn spawn_merge_task(
                 },
             };
             let _ = app_lines.emit(TASK_EVENT_NAME, event);
-        });
+        };
+        let success = if continuing {
+            run_merge_continue_flow(
+                &svn_bin,
+                &route,
+                &revisions,
+                &shelves_dir,
+                &merge_session_id,
+                emit_line,
+            )
+        } else {
+            run_merge_flow(
+                &svn_bin,
+                &route,
+                &revisions,
+                &shelves_dir,
+                &merge_session_id,
+                emit_line,
+            )
+        };
 
         let _ = app_thread.emit(
             TASK_EVENT_NAME,

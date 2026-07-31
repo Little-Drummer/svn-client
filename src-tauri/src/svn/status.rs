@@ -44,7 +44,7 @@ struct WcStatus {
     #[serde(rename = "@copied", default)]
     copied: Option<String>,
     #[serde(rename = "@revision")]
-    revision: Option<u64>,
+    revision: Option<i64>,
     commit: Option<Commit>,
 }
 
@@ -132,14 +132,16 @@ fn entry_to_status_with_options(entry: Entry, include_normal: bool) -> Option<Sv
         .repos_status
         .as_ref()
         .and_then(|status| status.props.clone());
-    let local_normal = wc.item == "normal" && wc.props.as_deref().unwrap_or("none") == "none";
+    // 远端新增但本地尚不存在时，SVN 会把 wc-status.item 标为 none，它不属于本地更改。
+    let local_normal = matches!(wc.item.as_str(), "normal" | "none")
+        && matches!(wc.props.as_deref().unwrap_or("none"), "normal" | "none");
     let remote_normal = repos_item
         .as_deref()
         .map(|item| item == "normal" || item == "none")
         .unwrap_or(true)
         && repos_props
             .as_deref()
-            .map(|props| props == "none")
+            .map(|props| matches!(props, "normal" | "none"))
             .unwrap_or(true);
     if !include_normal && local_normal && remote_normal {
         return None;
@@ -153,7 +155,8 @@ fn entry_to_status_with_options(entry: Entry, include_normal: bool) -> Option<Sv
         item: wc.item,
         props: wc.props,
         copied: wc.copied.as_deref() == Some("true"),
-        revision: wc.revision,
+        // SVN 会用 -1 表示 missing 等没有有效基准版本的条目，对外统一转为空版本号。
+        revision: wc.revision.and_then(|revision| revision.try_into().ok()),
         commit_revision,
         commit_author,
         commit_date,
@@ -292,4 +295,28 @@ where
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_negative_revision_as_missing_revision() {
+        let xml = include_str!("../../tests/fixtures/status_negative_revision.xml");
+        let parsed: StatusRoot = quick_xml::de::from_str(xml).expect("应能解析真实 SVN 状态 XML");
+        let entries = parsed
+            .targets
+            .into_iter()
+            .flat_map(|target| target.entries)
+            .filter_map(entry_to_status)
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].item, "missing");
+        assert_eq!(entries[0].revision, None);
+        assert_eq!(entries[0].commit_revision, Some(140817));
+        assert_eq!(entries[1].item, "unversioned");
+        assert_eq!(entries[1].revision, None);
+    }
 }

@@ -8,6 +8,7 @@ import type {
   MergeRouteConfig,
   MergeRevision,
   MergePreview,
+  MergeSessionStatus,
   PackageOptions,
   PackageRevision,
   PackageBuildResult,
@@ -20,6 +21,7 @@ import type {
   SvnInfo,
   SvnLogEntry,
   SvnStatusEntry,
+  UnversionedTreeEntry,
   RepositoryEntry,
   RemoteListEntry,
   WorkingCopyEntry,
@@ -72,8 +74,10 @@ export const api = {
     invoke<MergeRevision[]>('merge_fetch_revisions', { route }),
   mergePreview: (route: MergeRoute, entries: MergeRevision[], revisions: number[]) =>
     invoke<MergePreview>('merge_preview', { route, entries, revisions }),
-  mergeExecute: (route: MergeRoute, revisions: number[]) =>
-    invoke<string>('merge_execute', { route, revisions }),
+  mergeExecute: (route: MergeRoute, revisions: number[], sessionId?: string) =>
+    invoke<string>('merge_execute', { route, revisions, sessionId }),
+  mergeSessionStatus: (sessionId: string, targetPath: string) =>
+    invoke<MergeSessionStatus>('merge_session_status', { sessionId, targetPath }),
   mergeRollback: (taskId: string, targetPath: string) =>
     invoke<boolean>('merge_rollback', { taskId, targetPath }),
   mergeRestoreShelf: (taskId: string, targetPath: string) =>
@@ -124,6 +128,8 @@ export const api = {
   info: (path: string) => invoke<SvnInfo>('svn_get_info', { path }),
   status: (path: string, showUnversioned = true, showIgnored = false) =>
     invoke<SvnStatusEntry[]>('svn_get_status', { path, showUnversioned, showIgnored }),
+  listUnversionedTree: (paths: string[]) =>
+    invoke<UnversionedTreeEntry[]>('list_unversioned_tree', { paths }),
   statusSummary: (path: string) =>
     invoke<WorkingCopyStatusSummary>('svn_get_status_summary', { path }),
   statusStream: (path: string, showUnversioned = true, showIgnored = false, requestId: string) =>

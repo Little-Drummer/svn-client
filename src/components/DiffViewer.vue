@@ -15,6 +15,7 @@ const props = defineProps<{
   currentContent?: string | null
   filename?: string | null
   loading?: boolean
+  revealFirstChange?: boolean
 }>()
 
 const containerRef = ref<HTMLDivElement | null>(null)
@@ -88,6 +89,8 @@ function createSplit() {
     original: monaco.editor.createModel(props.baseContent ?? '', lang),
     modified: monaco.editor.createModel(props.currentContent ?? '', lang),
   })
+  // Monaco 会等待差异计算完成后再定位，历史文件首次打开时直接展示第一处修改。
+  if (props.revealFirstChange) void diffInstance.value.revealFirstDiff()
 }
 
 // 固定使用左右对比，同一编辑器内只替换模型，避免文件切换时反复重建实例。
@@ -110,7 +113,18 @@ function refresh() {
     original: monaco.editor.createModel(props.baseContent ?? '', lang),
     modified: monaco.editor.createModel(props.currentContent ?? '', lang),
   })
+  if (props.revealFirstChange) void diffInstance.value.revealFirstDiff()
 }
+
+function goToPreviousChange() {
+  diffInstance.value?.goToDiff('previous')
+}
+
+function goToNextChange() {
+  diffInstance.value?.goToDiff('next')
+}
+
+defineExpose({ goToPreviousChange, goToNextChange })
 
 onMounted(() => {
   ensureMonacoEnv()

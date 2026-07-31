@@ -69,6 +69,12 @@ export interface MergePreview {
   message: string
 }
 
+export interface MergeSessionStatus {
+  hasConflicts: boolean
+  hasChanges: boolean
+  hasBatchChanges: boolean
+}
+
 // 本地开发配置预设，与后端 ConfigPreset 对应。全局统一，不绑定项目。
 export interface PresetFragment {
   startLine: number // 1-based
@@ -247,6 +253,13 @@ export interface SvnStatusEntry {
   commitDate?: string | null
   reposItem?: string | null
   reposProps?: string | null
+}
+
+export interface UnversionedTreeEntry {
+  rootPath: string
+  path: string
+  kind: 'dir' | 'file' | string
+  depth: number
 }
 
 export interface WorkingCopyStatusSummary {

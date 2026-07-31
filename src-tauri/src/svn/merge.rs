@@ -62,6 +62,15 @@ pub struct MergePreview {
     pub message: String,
 }
 
+// 合并会话现场状态，供冲突解决后重新检查。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeSessionStatus {
+    pub has_conflicts: bool,
+    pub has_changes: bool,
+    pub has_batch_changes: bool,
+}
+
 fn find_module<'a>(project: &'a Project, env: &str, module: &str) -> Option<&'a ProjectModule> {
     project
         .branches
@@ -539,6 +548,58 @@ fn merge_shelf_dir(shelves_dir: &Path, session_id: &str) -> AppResult<PathBuf> {
     Ok(shelves_dir.join(session_id))
 }
 
+fn status_has_conflicts(status: &str) -> bool {
+    status
+        .lines()
+        .any(|line| line.chars().take(7).any(|ch| ch == 'C'))
+}
+
+fn validate_merge_session_target(shelf_dir: &Path, target: &str) -> AppResult<()> {
+    let recorded_target = fs::read_to_string(shelf_dir.join("target.txt"))?;
+    if recorded_target != target {
+        return Err(crate::errors::AppError::Other(
+            "合并会话与目标工作副本不匹配".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn merge_batch_snapshot(svn_bin: &str, target: &str) -> String {
+    let status = wc_status_text(svn_bin, target);
+    let diff = run_svn(svn_bin, &["diff", "--non-interactive", target])
+        .map(|output| output.stdout)
+        .unwrap_or_default();
+    format!("{status}\n--- DIFF ---\n{diff}")
+}
+
+fn write_merge_batch_baseline(svn_bin: &str, target: &str, shelf_dir: &Path) -> AppResult<()> {
+    fs::write(
+        shelf_dir.join("batch-before.txt"),
+        merge_batch_snapshot(svn_bin, target),
+    )?;
+    Ok(())
+}
+
+/// 检查合并现场是否仍有冲突，以及是否保留了可提交的版本化修改。
+pub fn inspect_merge_session(
+    svn_bin: &str,
+    target: &str,
+    shelves_dir: &Path,
+    session_id: &str,
+) -> AppResult<MergeSessionStatus> {
+    let shelf_dir = merge_shelf_dir(shelves_dir, session_id)?;
+    validate_merge_session_target(&shelf_dir, target)?;
+    let status = wc_status_text(svn_bin, target);
+    let baseline = fs::read_to_string(shelf_dir.join("batch-before.txt")).unwrap_or_default();
+    let has_batch_changes =
+        !baseline.is_empty() && merge_batch_snapshot(svn_bin, target) != baseline;
+    Ok(MergeSessionStatus {
+        has_conflicts: status_has_conflicts(&status),
+        has_changes: has_versioned_changes(&status),
+        has_batch_changes,
+    })
+}
+
 // 将目标工作副本的版本化修改保存为补丁，并清理工作副本供合并使用
 fn shelve_target(
     svn_bin: &str,
@@ -694,6 +755,10 @@ pub fn run_merge_flow<F: FnMut(StreamLine)>(
     }
     // 2. merge
     info(&mut on_line, "开始执行 svn merge...");
+    if let Err(e) = write_merge_batch_baseline(svn_bin, target, &shelf_dir) {
+        on_line(StreamLine::Stderr(format!("记录本批合并前现场失败：{e}")));
+        return false;
+    }
     let url = source_url(svn_bin, &route.source_path);
     let arg = merge_revision_arg(revisions);
     if !run_step(
@@ -701,19 +766,21 @@ pub fn run_merge_flow<F: FnMut(StreamLine)>(
         &["merge", "--non-interactive", "-c", &arg, &url, target],
         &mut on_line,
     ) {
-        on_line(StreamLine::Stderr(
-            "合并失败或存在冲突，可撤销本次合并并恢复搁置文件。".into(),
-        ));
+        let status = wc_status_text(svn_bin, target);
+        let message = if status_has_conflicts(&status) {
+            "合并产生冲突。请手动解决并标记 resolved，然后回到这里重新检测；也可以撤销本次合并。"
+        } else {
+            "合并命令执行失败。可检查当前合并现场，或撤销本次合并并恢复搁置文件。"
+        };
+        on_line(StreamLine::Stderr(message.into()));
         return false;
     }
 
     let status = wc_status_text(svn_bin, target);
-    if status
-        .lines()
-        .any(|line| line.chars().take(7).any(|ch| ch == 'C'))
-    {
+    if status_has_conflicts(&status) {
         on_line(StreamLine::Stderr(
-            "检测到合并冲突，可撤销本次合并并恢复搁置文件。".into(),
+            "检测到合并冲突。请手动解决并标记 resolved，然后回到这里重新检测；也可以撤销本次合并。"
+                .into(),
         ));
         return false;
     }
@@ -721,6 +788,79 @@ pub fn run_merge_flow<F: FnMut(StreamLine)>(
     info(
         &mut on_line,
         "合并完成，变更已保留在目标工作副本，请检查后单独提交。",
+    );
+    true
+}
+
+/// 在同一会话中继续合并：保留此前合并结果，不再 update 或重复搁置。
+pub fn run_merge_continue_flow<F: FnMut(StreamLine)>(
+    svn_bin: &str,
+    route: &MergeRoute,
+    revisions: &[u64],
+    shelves_dir: &Path,
+    session_id: &str,
+    mut on_line: F,
+) -> bool {
+    let target = &route.target_path;
+    let status = match inspect_merge_session(svn_bin, target, shelves_dir, session_id) {
+        Ok(status) => status,
+        Err(e) => {
+            on_line(StreamLine::Stderr(e.to_string()));
+            return false;
+        }
+    };
+    if status.has_conflicts {
+        on_line(StreamLine::Stderr(
+            "当前合并现场仍有冲突，请全部解决并标记 resolved 后再继续。".into(),
+        ));
+        return false;
+    }
+    if !status.has_changes {
+        on_line(StreamLine::Stderr(
+            "当前会话没有可保留的合并修改，无法继续合并。".into(),
+        ));
+        return false;
+    }
+
+    info(&mut on_line, "保留已有合并结果，继续合并所选版本...");
+    let shelf_dir = match merge_shelf_dir(shelves_dir, session_id) {
+        Ok(path) => path,
+        Err(e) => {
+            on_line(StreamLine::Stderr(e.to_string()));
+            return false;
+        }
+    };
+    if let Err(e) = write_merge_batch_baseline(svn_bin, target, &shelf_dir) {
+        on_line(StreamLine::Stderr(format!("记录本批合并前现场失败：{e}")));
+        return false;
+    }
+    let url = source_url(svn_bin, &route.source_path);
+    let arg = merge_revision_arg(revisions);
+    if !run_step(
+        svn_bin,
+        &["merge", "--non-interactive", "-c", &arg, &url, target],
+        &mut on_line,
+    ) {
+        let status = wc_status_text(svn_bin, target);
+        let message = if status_has_conflicts(&status) {
+            "继续合并时产生冲突。请解决并标记 resolved 后重新检测。"
+        } else {
+            "继续合并失败，已保留此前合并现场。"
+        };
+        on_line(StreamLine::Stderr(message.into()));
+        return false;
+    }
+
+    let status = wc_status_text(svn_bin, target);
+    if status_has_conflicts(&status) {
+        on_line(StreamLine::Stderr(
+            "检测到合并冲突。请解决并标记 resolved 后重新检测。".into(),
+        ));
+        return false;
+    }
+    info(
+        &mut on_line,
+        "本批版本合并完成，可继续选择下一批版本，或统一提交当前合并结果。",
     );
     true
 }

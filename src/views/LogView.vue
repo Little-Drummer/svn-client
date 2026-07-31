@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, ChevronDown, ChevronRight, RefreshCw, Undo2 } from 'lucide-vue-next'
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  RefreshCw,
+  Undo2,
+} from 'lucide-vue-next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -111,6 +119,17 @@ const currentContent = ref<string | null>(null)
 const diffText = ref<string | null>(null)
 const diffLoading = ref(false)
 const diffGen = createGeneration()
+type DiffViewerHandle = {
+  goToPreviousChange: () => void
+  goToNextChange: () => void
+}
+const diffViewerRef = ref<DiffViewerHandle | null>(null)
+
+const canNavigateDiff = computed(() => {
+  if (diffLoading.value || baseContent.value == null || currentContent.value == null) return false
+  if (/Cannot display:.*binary/i.test(diffText.value ?? '')) return false
+  return baseContent.value !== currentContent.value
+})
 
 // 把 log 给的 repo-root-relative path 拼成完整文件 URL（逐段编码，处理空格/中文）
 function fileUrl(path: string): string | null {
@@ -350,16 +369,40 @@ function actionClass(a: string) {
           返回
         </Button>
         <span class="diff-path mono" :title="fileDiff.path">{{ fileDiff.path }}</span>
+        <div class="diff-navigation" aria-label="修改位置导航">
+          <Button
+            size="xs"
+            variant="ghost"
+            :disabled="!canNavigateDiff"
+            title="跳转到上一处修改"
+            @click="diffViewerRef?.goToPreviousChange()"
+          >
+            <ArrowUp class="icon-xs" />
+            上一处
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            :disabled="!canNavigateDiff"
+            title="跳转到下一处修改"
+            @click="diffViewerRef?.goToNextChange()"
+          >
+            <ArrowDown class="icon-xs" />
+            下一处
+          </Button>
+        </div>
         <Badge variant="default" class="mono">r{{ fileDiff.rev }}</Badge>
       </div>
       <div class="diff-host">
         <DiffViewer
           :key="`${fileDiff.rev}:${fileDiff.path}`"
+          ref="diffViewerRef"
           :diff-text="diffText"
           :base-content="baseContent"
           :current-content="currentContent"
           :filename="fileDiff.name"
           :loading="diffLoading"
+          reveal-first-change
         />
       </div>
     </div>
@@ -625,6 +668,15 @@ function actionClass(a: string) {
   text-align: left;
   font-size: var(--fs-callout);
   color: var(--fg-strong);
+}
+.diff-navigation {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.diff-navigation button {
+  gap: 4px;
 }
 .diff-host {
   flex: 1;

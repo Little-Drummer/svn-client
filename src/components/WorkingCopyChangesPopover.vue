@@ -2,17 +2,21 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronRight,
   File,
   FileMinus2,
   FilePenLine,
   FilePlus2,
   FileQuestion,
+  Folder,
+  FolderOpen,
   RefreshCw,
   X,
 } from 'lucide-vue-next'
 
 import { api, describeError } from '../api/svn'
-import type { SvnStatusEntry, WorkingCopyEntry } from '../types/svn'
+import type { SvnStatusEntry, UnversionedTreeEntry, WorkingCopyEntry } from '../types/svn'
 
 const props = defineProps<{
   open: boolean
@@ -27,6 +31,8 @@ const emit = defineEmits<{
 
 const panelRef = ref<HTMLElement | null>(null)
 const entries = ref<SvnStatusEntry[]>([])
+const unversionedTree = ref<UnversionedTreeEntry[]>([])
+const expandedPaths = ref<Set<string>>(new Set())
 const loading = ref(false)
 const error = ref('')
 const left = ref(0)
@@ -62,9 +68,67 @@ const STATUS_META: Record<string, { label: string; tone: string; icon: typeof Fi
 const position = computed(() => ({ left: `${left.value}px`, top: `${top.value}px` }))
 const title = computed(() => props.workingCopy?.displayName || leafName(props.workingCopy?.path || ''))
 
+type ChangeRow = {
+  entry: SvnStatusEntry
+  kind?: string
+  depth: number
+  hasChildren: boolean
+}
+
+const changeRows = computed<ChangeRow[]>(() => {
+  const treeByRoot = new Map<string, UnversionedTreeEntry[]>()
+  for (const item of unversionedTree.value) {
+    const group = treeByRoot.get(item.rootPath) ?? []
+    group.push(item)
+    treeByRoot.set(item.rootPath, group)
+  }
+
+  const rows: ChangeRow[] = []
+  for (const entry of entries.value) {
+    const tree = treeByRoot.get(entry.path) ?? []
+    const root = tree.find((item) => item.depth === 0)
+    rows.push({ entry, kind: root?.kind, depth: 0, hasChildren: tree.length > 1 })
+    if (entry.item !== 'unversioned') continue
+
+    // tree 是后端按深度优先顺序返回的，用目录栈判断每一层祖先是否已展开。
+    const directoryStack: string[] = []
+    for (let index = 0; index < tree.length; index += 1) {
+      const child = tree[index]
+      directoryStack.length = child.depth
+      const visible = directoryStack.every((path) => expandedPaths.value.has(path))
+      const isDirectory = child.kind === 'dir'
+      if (child.depth > 0 && visible) {
+        rows.push({
+          entry: { ...entry, path: child.path },
+          kind: child.kind,
+          depth: child.depth,
+          hasChildren: isDirectory && (tree[index + 1]?.depth ?? 0) > child.depth,
+        })
+      }
+      if (isDirectory) {
+        directoryStack[child.depth] = child.path
+      }
+    }
+  }
+  return rows
+})
+
+function isExpanded(row: ChangeRow) {
+  return expandedPaths.value.has(row.entry.path)
+}
+
+async function toggleDirectory(row: ChangeRow) {
+  if (row.kind !== 'dir' || !row.hasChildren) return
+  const next = new Set(expandedPaths.value)
+  if (next.has(row.entry.path)) next.delete(row.entry.path)
+  else next.add(row.entry.path)
+  expandedPaths.value = next
+  await reposition()
+}
+
 function isLocalChange(entry: SvnStatusEntry) {
-  const propsChanged = (entry.props ?? 'none') !== 'none'
-  return !['normal', 'ignored', 'external'].includes(entry.item) || propsChanged
+  const propsChanged = !['normal', 'none'].includes(entry.props ?? 'none')
+  return !['normal', 'none', 'ignored', 'external'].includes(entry.item) || propsChanged
 }
 
 function statusMeta(entry: SvnStatusEntry) {
@@ -99,6 +163,8 @@ async function load() {
   const generation = ++requestGeneration
   loading.value = true
   error.value = ''
+  unversionedTree.value = []
+  expandedPaths.value = new Set()
   try {
     const result = await api.status(wc.path, true, false)
     if (generation !== requestGeneration) return
@@ -106,12 +172,35 @@ async function load() {
       const rank = statusRank(a) - statusRank(b)
       return rank || relativePath(a.path).localeCompare(relativePath(b.path), 'zh-CN')
     })
+    const unversionedPaths = entries.value
+      .filter((entry) => entry.item === 'unversioned')
+      .map((entry) => entry.path)
+    if (unversionedPaths.length > 0) {
+      try {
+        const tree = await api.listUnversionedTree(unversionedPaths)
+        if (generation !== requestGeneration) return
+        unversionedTree.value = tree
+        // 顶层未跟踪目录默认展开一层，内部目录由用户按需继续展开。
+        expandedPaths.value = new Set(
+          tree
+            .filter((item) => item.depth === 0 && item.kind === 'dir')
+            .map((item) => item.path),
+        )
+      } catch {
+        // 展开失败时仍保留 SVN 原始状态列表，避免辅助信息影响核心结果。
+        unversionedTree.value = []
+      }
+    }
   } catch (cause) {
     if (generation !== requestGeneration) return
     entries.value = []
     error.value = describeError(cause)
   } finally {
-    if (generation === requestGeneration) loading.value = false
+    if (generation === requestGeneration) {
+      loading.value = false
+      // 实际内容可能远高于骨架屏，渲染完成后重新贴合视口，避免底部项目的弹窗被裁切。
+      await reposition()
+    }
   }
 }
 
@@ -228,16 +317,36 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-else class="change-list">
-            <div v-for="entry in entries" :key="entry.path" class="change-row" :title="entry.path">
-              <span :class="['file-icon-wrap', `tone-${statusMeta(entry).tone}`]">
-                <component :is="statusMeta(entry).icon" />
+            <div
+              v-for="row in changeRows"
+              :key="row.entry.path"
+              :class="['change-row', { 'change-row-child': row.depth > 0 }]"
+              :style="{ paddingLeft: `${7 + row.depth * 16}px` }"
+              :title="row.entry.path"
+            >
+              <button
+                v-if="row.kind === 'dir' && row.hasChildren"
+                class="tree-toggle"
+                type="button"
+                :title="isExpanded(row) ? '收起文件夹' : '展开文件夹'"
+                :aria-label="isExpanded(row) ? `收起 ${leafName(row.entry.path)}` : `展开 ${leafName(row.entry.path)}`"
+                @click.stop="toggleDirectory(row)"
+              >
+                <ChevronDown v-if="isExpanded(row)" />
+                <ChevronRight v-else />
+              </button>
+              <span v-else class="tree-toggle-spacer" />
+              <span :class="['file-icon-wrap', `tone-${statusMeta(row.entry).tone}`]">
+                <component
+                  :is="row.kind === 'dir' ? (isExpanded(row) ? FolderOpen : Folder) : statusMeta(row.entry).icon"
+                />
               </span>
               <div class="file-copy">
-                <span class="file-name">{{ leafName(entry.path) }}</span>
-                <span class="file-path mono">{{ parentPath(entry.path) || './' }}</span>
+                <span class="file-name">{{ leafName(row.entry.path) }}</span>
+                <span class="file-path mono">{{ parentPath(row.entry.path) || './' }}</span>
               </div>
-              <span :class="['status-label', `tone-${statusMeta(entry).tone}`]">
-                {{ statusMeta(entry).label }}
+              <span :class="['status-label', `tone-${statusMeta(row.entry).tone}`]">
+                {{ statusMeta(row.entry).label }}
               </span>
             </div>
           </div>
@@ -347,14 +456,40 @@ onBeforeUnmount(() => {
 .change-row {
   min-height: 43px;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
+  grid-template-columns: 14px 26px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 5px 7px;
   border-radius: var(--radius-row);
 }
+.tree-toggle,
+.tree-toggle-spacer {
+  width: 14px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  color: var(--fg-muted);
+  background: transparent;
+}
+.tree-toggle {
+  border-radius: var(--radius-sm);
+}
+.tree-toggle:hover {
+  color: var(--fg-strong);
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.tree-toggle svg {
+  width: 13px;
+  height: 13px;
+}
 .change-row:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.change-row-child {
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
 }
 .file-icon-wrap {
   width: 26px;
@@ -462,10 +597,14 @@ onBeforeUnmount(() => {
 .skeleton-row {
   min-height: 43px;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 42px;
+  grid-template-columns: 14px 26px minmax(0, 1fr) 42px;
   align-items: center;
   gap: 8px;
   padding: 5px 7px;
+}
+.skeleton-row::before {
+  width: 14px;
+  content: '';
 }
 .skeleton-icon,
 .skeleton-copy,
