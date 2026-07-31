@@ -18,8 +18,9 @@ use crate::svn::list::{
 };
 use crate::svn::log::{svn_log, LogOptions};
 use crate::svn::merge::{
-    build_configured_routes, build_preview, build_routes, fetch_revisions, restore_merge_shelf,
-    rollback_merge, MergePreview, MergeRevision, MergeRoute,
+    build_configured_routes, build_preview, build_routes, fetch_revisions, inspect_merge_session,
+    restore_merge_shelf, rollback_merge, MergePreview, MergeRevision, MergeRoute,
+    MergeSessionStatus,
 };
 use crate::svn::package::{
     commit_version, fetch_package_revisions, package_zip, run_package_build, PackageBuildResult,
@@ -604,13 +605,44 @@ pub fn merge_execute(
     state: State<ConfigState>,
     route: MergeRoute,
     revisions: Vec<u64>,
+    session_id: Option<String>,
 ) -> AppResult<String> {
     if revisions.is_empty() {
         return Err(AppError::Other("没有选择任何版本".into()));
     }
     let bin = state.svn_bin();
     let shelves_dir = shelves_dir_of(&state)?;
-    spawn_merge_task(app, bin, route, revisions, shelves_dir)
+    if let Some(id) = session_id.as_deref() {
+        let status = inspect_merge_session(&bin, &route.target_path, &shelves_dir, id)?;
+        if status.has_conflicts {
+            return Err(AppError::Other(
+                "当前合并现场仍有冲突，请解决并标记 resolved 后再继续".into(),
+            ));
+        }
+        if !status.has_changes {
+            return Err(AppError::Other(
+                "当前会话没有可保留的合并修改，无法继续合并".into(),
+            ));
+        }
+        if !status.has_batch_changes {
+            return Err(AppError::Other(
+                "上一批合并没有产生新改动，无法继续合并".into(),
+            ));
+        }
+    }
+    spawn_merge_task(app, bin, route, revisions, shelves_dir, session_id)
+}
+
+/// 冲突人工解决后重新检查合并现场，决定是否允许继续合并或提交。
+#[tauri::command]
+pub fn merge_session_status(
+    state: State<ConfigState>,
+    session_id: String,
+    target_path: String,
+) -> AppResult<MergeSessionStatus> {
+    let bin = state.svn_bin();
+    let shelves_dir = shelves_dir_of(&state)?;
+    inspect_merge_session(&bin, target_path.trim(), &shelves_dir, session_id.trim())
 }
 
 /// 撤销指定合并会话产生的修改，并恢复该会话自动搁置的文件。

@@ -105,6 +105,7 @@ pub fn run() {
             commands::merge_fetch_revisions,
             commands::merge_preview,
             commands::merge_execute,
+            commands::merge_session_status,
             commands::merge_rollback,
             commands::merge_restore_shelf,
             commands::shelf_create,

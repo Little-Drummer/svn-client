@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Package, RefreshCw, FolderOpen, CheckCircle2 } from 'lucide-vue-next'
 
 import { Button } from '@/components/ui/button'
@@ -10,14 +10,17 @@ import { Badge } from '@/components/ui/badge'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
 import { api } from '../api/svn'
+import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useErrorToast } from '../composables/use-error-toast'
 import { useAppToast } from '../composables/use-app-toast'
+import { createGeneration } from '../composables/use-request-generation'
 import type { PackageBuildResult, PackageRevision, PackageZipResult, Project } from '../types/svn'
 
 const props = defineProps<{ activeProjectName?: string | null }>()
 
 const toast = useErrorToast()
 const appToast = useAppToast()
+const wcStore = useWorkingCopiesStore()
 
 const projects = ref<Project[]>([])
 const projectName = ref<string>('')
@@ -48,6 +51,8 @@ const zipping = ref(false)
 const zipResult = ref<PackageZipResult | null>(null)
 const committing = ref(false)
 const committed = ref(false)
+const projectsGen = createGeneration()
+let appliedActiveProjectName: string | null = null
 
 const filteredRevisions = computed(() => {
   const kw = filter.value.trim().toLowerCase()
@@ -64,16 +69,38 @@ const canBuild = computed(
   () => !!restPath.value && requirementName.value.trim().length > 0 && !building.value,
 )
 
-onMounted(loadProjects)
+watch(
+  () => wcStore.projectTopologyVersion,
+  () => {
+    void loadProjects()
+  },
+  { immediate: true },
+)
 
 async function loadProjects() {
+  const token = projectsGen.next()
   try {
-    projects.value = await api.listProjects()
-    const want = props.activeProjectName
-    const match = want && projects.value.find((p) => p.name === want)
-    projectName.value = match ? want! : projects.value[0]?.name ?? ''
-    onProjectChange()
+    const previousName = projectName.value
+    const previousProject = projects.value.find((project) => project.name === previousName)
+    const nextProjects = await wcStore.listProjects()
+    if (!projectsGen.isCurrent(token)) return
+    projects.value = nextProjects
+    const current = nextProjects.find((project) => project.name === previousName)
+    const active = props.activeProjectName
+      ? nextProjects.find((project) => project.name === props.activeProjectName)
+      : null
+    const shouldApplyActive = !!active && active.name !== appliedActiveProjectName
+    const nextName =
+      (shouldApplyActive ? active?.name : null) ?? current?.name ?? active?.name ?? nextProjects[0]?.name ?? ''
+    const nextProject = nextProjects.find((project) => project.name === nextName)
+    const currentStructureChanged =
+      previousName !== nextName ||
+      JSON.stringify(previousProject ?? null) !== JSON.stringify(nextProject ?? null)
+    projectName.value = nextName
+    if (active?.name === nextName) appliedActiveProjectName = active.name
+    if (currentStructureChanged) onProjectChange()
   } catch (e) {
+    if (!projectsGen.isCurrent(token)) return
     toast(e, '加载项目失败')
   }
 }
@@ -81,10 +108,15 @@ async function loadProjects() {
 watch(
   () => props.activeProjectName,
   (name) => {
-    if (name && projects.value.some((p) => p.name === name) && name !== projectName.value) {
-      projectName.value = name
-      onProjectChange()
+    if (!name) {
+      appliedActiveProjectName = null
+      return
     }
+    if (!projects.value.some((p) => p.name === name)) return
+    appliedActiveProjectName = name
+    if (name === projectName.value) return
+    projectName.value = name
+    onProjectChange()
   },
 )
 

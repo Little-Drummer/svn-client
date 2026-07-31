@@ -18,14 +18,19 @@ import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
 import TaskOutput from '@/components/TaskOutput.vue'
 import { api } from '../api/svn'
 import { useTasksStore } from '../stores/tasks'
+import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useErrorToast } from '../composables/use-error-toast'
+import { useAppToast } from '../composables/use-app-toast'
+import { createGeneration } from '../composables/use-request-generation'
 import { confirm } from '../composables/use-confirm-dialog'
 import type { MergePreview, MergeRevision, MergeRoute, MergeRouteConfig, Project } from '../types/svn'
 
 const props = defineProps<{ activeProjectName?: string | null }>()
 
 const tasksStore = useTasksStore()
+const wcStore = useWorkingCopiesStore()
 const toast = useErrorToast()
+const appToast = useAppToast()
 
 const projects = ref<Project[]>([])
 const projectName = ref<string>('')
@@ -51,20 +56,26 @@ const taskId = ref<string | null>(null)
 const mergeTaskId = ref<string | null>(null)
 const taskAction = ref<'merge' | 'commit' | null>(null)
 const mergeReadyToCommit = ref(false)
+const mergeNeedsResolution = ref(false)
 const commitCompleted = ref(false)
 const recovering = ref(false)
+const checkingSession = ref(false)
+const mergedEntries = ref<MergeRevision[]>([])
+const pendingMergeEntries = ref<MergeRevision[]>([])
+const projectsGen = createGeneration()
+let appliedActiveProjectName: string | null = null
+let projectReloadDeferred = false
 const running = computed(() => {
   if (!taskId.value) return false
   const t = tasksStore.tasks.get(taskId.value)
   return !!t && !t.finished
 })
 const currentProject = computed(() => projects.value.find((p) => p.name === projectName.value) ?? null)
-const mergeTaskFailed = computed(() => {
-  if (!mergeTaskId.value) return false
-  const task = tasksStore.tasks.get(mergeTaskId.value)
-  return !!task?.finished && task.success === false
-})
-const mergeSessionLocked = computed(() => mergeReadyToCommit.value || mergeTaskFailed.value || commitCompleted.value)
+// 会话期间锁住项目和方向，但允许在冲突解决后继续选择下一批版本。
+const mergeSessionLocked = computed(() => !!mergeTaskId.value || commitCompleted.value)
+const revisionSelectionLocked = computed(
+  () => running.value || mergeNeedsResolution.value || commitCompleted.value,
+)
 const routeConfigsInvalid = computed(() =>
   routeConfigs.value.some(
     (config) =>
@@ -259,27 +270,50 @@ const filteredRevisions = computed(() => {
 
 const selectedCount = computed(() => selected.value.size)
 
-onMounted(async () => {
+onMounted(() => {
   tasksStore.ensureListener()
-  await loadProjects()
 })
+
+watch(
+  () => wcStore.projectTopologyVersion,
+  () => {
+    void loadProjects()
+  },
+  { immediate: true },
+)
 
 const handledTaskIds = new Set<string>()
 
-// 合并成功后停在待提交阶段；提交成功后恢复合并前的搁置内容
+function acceptPendingMerge() {
+  const entries = new Map(mergedEntries.value.map((entry) => [entry.revision, entry]))
+  for (const entry of pendingMergeEntries.value) entries.set(entry.revision, entry)
+  mergedEntries.value = [...entries.values()].sort((a, b) => a.revision - b.revision)
+  pendingMergeEntries.value = []
+}
+
+// 每批合并完成后保留会话，可继续选择下一批；最终提交成功后再恢复原搁置内容。
 watch(
   () => tasksStore.completedTask,
   async (completed) => {
     if (
       !completed ||
       completed.taskId !== taskId.value ||
-      !completed.success ||
       !route.value ||
       handledTaskIds.has(completed.taskId)
     ) return
     handledTaskIds.add(completed.taskId)
-    if (taskAction.value === 'merge') mergeReadyToCommit.value = true
-    if (taskAction.value === 'commit') {
+    if (taskAction.value === 'merge') {
+      if (completed.success) {
+        acceptPendingMerge()
+        mergeNeedsResolution.value = false
+        mergeReadyToCommit.value = true
+        await fetchRevisions()
+      } else {
+        mergeNeedsResolution.value = true
+        mergeReadyToCommit.value = false
+      }
+    }
+    if (taskAction.value === 'commit' && completed.success) {
       commitCompleted.value = true
       await restoreShelfAfterCommit()
     }
@@ -292,8 +326,11 @@ async function restoreShelfAfterCommit() {
   try {
     await api.mergeRestoreShelf(mergeTaskId.value, route.value.targetPath)
     mergeReadyToCommit.value = false
+    mergeNeedsResolution.value = false
     commitCompleted.value = false
     mergeTaskId.value = null
+    mergedEntries.value = []
+    pendingMergeEntries.value = []
     await fetchRevisions()
   } catch (e) {
     toast(e, '提交成功，但恢复搁置文件失败，请重试恢复')
@@ -302,15 +339,38 @@ async function restoreShelfAfterCommit() {
   }
 }
 
-async function loadProjects() {
+async function loadProjects(forceCurrentRefresh = false) {
+  const token = projectsGen.next()
   try {
-    projects.value = await api.listProjects()
-    // 优先选中外部传入的当前项目，否则取第一个
-    const want = props.activeProjectName
-    const match = want && projects.value.find((p) => p.name === want)
-    projectName.value = match ? want! : projects.value[0]?.name ?? ''
-    await onProjectChange()
+    const previousName = projectName.value
+    const previousProject = projects.value.find((project) => project.name === previousName)
+    const nextProjects = await wcStore.listProjects()
+    if (!projectsGen.isCurrent(token)) return
+    projects.value = nextProjects
+
+    // 合并会话中只同步下拉数据，不改变正在使用的方向和工作副本。
+    if (mergeSessionLocked.value) {
+      projectReloadDeferred = true
+      return
+    }
+
+    const current = nextProjects.find((project) => project.name === previousName)
+    const active = props.activeProjectName
+      ? nextProjects.find((project) => project.name === props.activeProjectName)
+      : null
+    const shouldApplyActive = !!active && active.name !== appliedActiveProjectName
+    const nextName =
+      (shouldApplyActive ? active?.name : null) ?? current?.name ?? active?.name ?? nextProjects[0]?.name ?? ''
+    const nextProject = nextProjects.find((project) => project.name === nextName)
+    const currentStructureChanged =
+      forceCurrentRefresh ||
+      previousName !== nextName ||
+      JSON.stringify(previousProject ?? null) !== JSON.stringify(nextProject ?? null)
+    projectName.value = nextName
+    if (active?.name === nextName) appliedActiveProjectName = active.name
+    if (currentStructureChanged) await onProjectChange()
   } catch (e) {
+    if (!projectsGen.isCurrent(token)) return
     toast(e, '加载项目失败')
   }
 }
@@ -318,12 +378,27 @@ async function loadProjects() {
 watch(
   () => props.activeProjectName,
   (name) => {
-    if (!mergeSessionLocked.value && name && projects.value.some((p) => p.name === name) && name !== projectName.value) {
-      projectName.value = name
-      onProjectChange()
+    if (!name) {
+      appliedActiveProjectName = null
+      return
     }
+    if (mergeSessionLocked.value) {
+      projectReloadDeferred = true
+      return
+    }
+    if (!projects.value.some((p) => p.name === name)) return
+    appliedActiveProjectName = name
+    if (name === projectName.value) return
+    projectName.value = name
+    onProjectChange()
   },
 )
+
+watch(mergeSessionLocked, (locked) => {
+  if (locked || !projectReloadDeferred) return
+  projectReloadDeferred = false
+  void loadProjects(true)
+})
 
 async function onProjectChange() {
   routeConfigOpen.value = false
@@ -333,7 +408,10 @@ async function onProjectChange() {
   mergeTaskId.value = null
   taskAction.value = null
   mergeReadyToCommit.value = false
+  mergeNeedsResolution.value = false
   commitCompleted.value = false
+  mergedEntries.value = []
+  pendingMergeEntries.value = []
   resetRevisions()
   if (!projectName.value) return
   loadingRoutes.value = true
@@ -354,7 +432,10 @@ function resetRevisions() {
   preview.value = null
   message.value = ''
   mergeReadyToCommit.value = false
+  mergeNeedsResolution.value = false
   commitCompleted.value = false
+  mergedEntries.value = []
+  pendingMergeEntries.value = []
 }
 
 function selectRoute(r: MergeRoute) {
@@ -368,13 +449,16 @@ function selectRoute(r: MergeRoute) {
 
 async function fetchRevisions() {
   if (!route.value) return
+  const keepSessionPreview = !!mergeTaskId.value
   loadingRevisions.value = true
   fetched.value = false
   try {
     revisions.value = await api.mergeFetchRevisions(route.value)
     selected.value = new Set()
-    preview.value = null
-    message.value = ''
+    if (!keepSessionPreview) {
+      preview.value = null
+      message.value = ''
+    }
     fetched.value = true
   } catch (e) {
     toast(e, '拉取可合并版本失败')
@@ -408,8 +492,19 @@ async function generatePreview() {
   generating.value = true
   try {
     const revs = [...selected.value].sort((a, b) => a - b)
-    preview.value = await api.mergePreview(route.value, revisions.value, revs)
-    message.value = preview.value.message
+    const selectedEntries = revisions.value.filter((entry) => selected.value.has(entry.revision))
+    const batchPreview = await api.mergePreview(route.value, selectedEntries, revs)
+    const allEntries = new Map(mergedEntries.value.map((entry) => [entry.revision, entry]))
+    for (const entry of selectedEntries) allEntries.set(entry.revision, entry)
+    const sessionEntries = [...allEntries.values()].sort((a, b) => a.revision - b.revision)
+    const sessionRevisions = sessionEntries.map((entry) => entry.revision)
+    const sessionPreview =
+      mergedEntries.value.length > 0
+        ? await api.mergePreview(route.value, sessionEntries, sessionRevisions)
+        : batchPreview
+    // 命令只展示本批实际执行内容，提交日志累计当前会话的全部版本。
+    preview.value = { command: batchPreview.command, message: sessionPreview.message }
+    message.value = sessionPreview.message
   } catch (e) {
     toast(e, '生成合并日志失败')
   } finally {
@@ -418,27 +513,73 @@ async function generatePreview() {
 }
 
 async function executeMerge() {
-  if (!route.value || selected.value.size === 0 || !message.value.trim()) return
+  if (
+    !route.value ||
+    selected.value.size === 0 ||
+    !message.value.trim() ||
+    mergeNeedsResolution.value ||
+    (mergeTaskId.value && !mergeReadyToCommit.value)
+  ) return
+  const continuing = !!mergeTaskId.value
   const ok = await confirm({
-    title: '执行合并',
-    content: `合并方向：${route.value.name}\n\n目标工作副本如有修改将先自动搁置，再执行 update → merge，不会自动提交。共 ${selected.value.size} 个版本。确认执行？`,
-    confirmText: '执行合并',
+    title: continuing ? '继续合并' : '执行合并',
+    content: continuing
+      ? `合并方向：${route.value.name}\n\n将保留当前会话已经合入的修改，继续合并所选的 ${selected.value.size} 个版本，仍不会自动提交。确认继续？`
+      : `合并方向：${route.value.name}\n\n目标工作副本如有修改将先自动搁置，再执行 update → merge，不会自动提交。共 ${selected.value.size} 个版本。确认执行？`,
+    confirmText: continuing ? '继续合并' : '执行合并',
     destructive: true,
   })
   if (!ok) return
+  const selectedEntries = revisions.value.filter((entry) => selected.value.has(entry.revision))
+  const previousReady = mergeReadyToCommit.value
   try {
     const revs = [...selected.value].sort((a, b) => a - b)
-    taskId.value = await api.mergeExecute(route.value, revs)
-    mergeTaskId.value = taskId.value
+    pendingMergeEntries.value = selectedEntries
+    mergeReadyToCommit.value = false
+    mergeNeedsResolution.value = false
+    taskId.value = await api.mergeExecute(route.value, revs, mergeTaskId.value ?? undefined)
+    if (!mergeTaskId.value) mergeTaskId.value = taskId.value
     taskAction.value = 'merge'
     tasksStore.register({
       taskId: taskId.value,
       kind: 'merge',
-      title: `合并 ${route.value.name}`,
+      title: `${continuing ? '继续合并' : '合并'} ${route.value.name}`,
       command: preview.value?.command,
     })
   } catch (e) {
+    pendingMergeEntries.value = []
+    mergeReadyToCommit.value = previousReady
     toast(e, '启动合并失败')
+  }
+}
+
+// 人工解决并 resolved 后，以真实工作副本状态解除冲突锁。
+async function checkMergeSession() {
+  if (!route.value || !mergeTaskId.value || checkingSession.value) return
+  checkingSession.value = true
+  try {
+    const status = await api.mergeSessionStatus(mergeTaskId.value, route.value.targetPath)
+    if (status.hasConflicts) {
+      appToast.warning('仍有未解决冲突', '请处理全部冲突并标记 resolved 后再次检测')
+      return
+    }
+    if (!status.hasChanges) {
+      appToast.warning('没有检测到合并结果', '本次命令可能在产生修改前已经失败，建议撤销会话后重试')
+      return
+    }
+    if (!status.hasBatchChanges) {
+      appToast.warning('本批没有产生新改动', '这不是可继续的冲突现场，请检查任务输出或撤销会话后重试')
+      return
+    }
+    acceptPendingMerge()
+    mergeNeedsResolution.value = false
+    mergeReadyToCommit.value = true
+    appToast.success('冲突已全部解决', '现在可以继续选择下一批版本，或统一提交')
+    await fetchRevisions()
+  } catch (e) {
+    toast(e, '检查合并现场失败')
+  } finally {
+    checkingSession.value = false
   }
 }
 
@@ -505,7 +646,10 @@ async function rollbackAndRestore() {
     mergeTaskId.value = null
     taskAction.value = null
     mergeReadyToCommit.value = false
+    mergeNeedsResolution.value = false
     commitCompleted.value = false
+    mergedEntries.value = []
+    pendingMergeEntries.value = []
     await fetchRevisions()
   } catch (e) {
     toast(e, '撤销合并或恢复搁置文件失败')
@@ -568,7 +712,7 @@ async function rollbackAndRestore() {
     <!-- 版本选择 -->
     <div v-if="route" class="revisions-block">
       <div class="rev-toolbar">
-        <Button size="xs" :disabled="loadingRevisions || running || mergeSessionLocked" @click="fetchRevisions">
+        <Button size="xs" :disabled="loadingRevisions || revisionSelectionLocked" @click="fetchRevisions">
           <RefreshCw class="icon-xs" :class="{ spin: loadingRevisions }" />
           {{ fetched ? '重新拉取' : '拉取可合并版本' }}
         </Button>
@@ -581,13 +725,13 @@ async function rollbackAndRestore() {
         <span class="spacer" />
         <template v-if="fetched && revisions.length">
           <Badge variant="secondary">已选 {{ selectedCount }}</Badge>
-          <Button size="xs" variant="ghost" :disabled="running || mergeSessionLocked" @click="selectAllVisible">全选</Button>
-          <Button size="xs" variant="ghost" :disabled="running || mergeSessionLocked" @click="clearSelection">清空</Button>
+          <Button size="xs" variant="ghost" :disabled="revisionSelectionLocked" @click="selectAllVisible">全选</Button>
+          <Button size="xs" variant="ghost" :disabled="revisionSelectionLocked" @click="clearSelection">清空</Button>
         </template>
         <Button
           v-if="selectedCount > 0"
           size="xs"
-          :disabled="generating || running || mergeSessionLocked"
+          :disabled="generating || revisionSelectionLocked"
           @click="generatePreview"
         >
           {{ generating ? '生成中…' : '生成合并日志' }}
@@ -609,7 +753,7 @@ async function rollbackAndRestore() {
           >
             <Checkbox
               :model-value="selected.has(r.revision)"
-              :disabled="running || mergeSessionLocked"
+              :disabled="revisionSelectionLocked"
               @update:model-value="(v: boolean | 'indeterminate') => toggleRev(r.revision, v)"
             />
             <div class="rev-meta">
@@ -638,7 +782,9 @@ async function rollbackAndRestore() {
       />
       <div class="exec-actions">
         <Badge v-if="commitCompleted" variant="secondary">提交完成，待恢复搁置文件</Badge>
-        <Badge v-else-if="mergeReadyToCommit" variant="secondary">合并完成，待检查并提交</Badge>
+        <Badge v-else-if="mergeReadyToCommit" variant="secondary">
+          已合并 {{ mergedEntries.length }} 个版本，可继续选择或统一提交
+        </Badge>
         <Button
           v-if="mergeReadyToCommit && !commitCompleted"
           variant="ghost"
@@ -667,10 +813,16 @@ async function rollbackAndRestore() {
           {{ recovering ? '恢复中…' : '恢复搁置文件' }}
         </Button>
         <Button
-          :disabled="running || mergeReadyToCommit || !message.trim()"
+          :disabled="running || mergeNeedsResolution || selectedCount === 0 || !message.trim()"
           @click="executeMerge"
         >
-          {{ running && taskAction === 'merge' ? '合并中…' : '执行合并' }}
+          {{
+            running && taskAction === 'merge'
+              ? '合并中…'
+              : mergeTaskId
+                ? '继续合并所选版本'
+                : '执行合并'
+          }}
         </Button>
         <Button
           variant="default"
@@ -690,10 +842,14 @@ async function rollbackAndRestore() {
       @close="taskId = null"
     />
 
-    <div v-if="mergeTaskFailed && route" class="merge-recovery-bar">
-      <Badge variant="destructive">合并失败或存在冲突</Badge>
-      <span>可撤销本次合并现场，并恢复合并前自动搁置的文件。</span>
-      <Button size="xs" variant="secondary" :disabled="recovering" @click="rollbackAndRestore">
+    <div v-if="mergeNeedsResolution && route" class="merge-recovery-bar">
+      <Badge variant="destructive">合并存在冲突或执行失败</Badge>
+      <span>手动解决全部冲突并标记 resolved 后重新检测；通过后可继续合并下一批版本。</span>
+      <Button size="xs" :disabled="checkingSession || recovering" @click="checkMergeSession">
+        <RefreshCw class="icon-xs" :class="{ spin: checkingSession }" />
+        {{ checkingSession ? '检测中…' : '冲突已解决，重新检测' }}
+      </Button>
+      <Button size="xs" variant="secondary" :disabled="checkingSession || recovering" @click="rollbackAndRestore">
         <RotateCcw class="icon-xs" />
         {{ recovering ? '恢复中…' : '撤销合并并恢复搁置' }}
       </Button>

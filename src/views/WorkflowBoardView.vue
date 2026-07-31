@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref, watch } from 'vue'
 import {
   GitBranch,
   GitMerge,
@@ -14,7 +14,9 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import { api } from '../api/svn'
+import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useErrorToast } from '../composables/use-error-toast'
+import { createGeneration } from '../composables/use-request-generation'
 import type { Project } from '../types/svn'
 
 const emit = defineEmits<{
@@ -22,6 +24,7 @@ const emit = defineEmits<{
 }>()
 
 const toast = useErrorToast()
+const wcStore = useWorkingCopiesStore()
 
 const projects = ref<Project[]>([])
 const loading = ref(false)
@@ -29,20 +32,34 @@ const loading = ref(false)
 // 每个 rest 模块的本地改动检查结果：path -> 变更文件数（-1 表示检查失败）
 const dirtyCounts = ref<Record<string, number>>({})
 const checking = ref<Record<string, boolean>>({})
+const projectsGen = createGeneration()
 
 // 工作流步骤图例（静态，帮助用户对齐流程心智）
 const STEPS = ['拉取', '配置', '开发', '合并', '提测', '打包']
 
-onMounted(load)
+watch(
+  () => wcStore.projectTopologyVersion,
+  () => {
+    void load()
+  },
+  { immediate: true },
+)
 
 async function load() {
+  const token = projectsGen.next()
   loading.value = true
   try {
-    projects.value = await api.listProjects()
+    const nextProjects = await wcStore.listProjects()
+    if (!projectsGen.isCurrent(token)) return
+    projects.value = nextProjects
+    // 项目结构变化后旧路径的检查结果不再可靠。
+    dirtyCounts.value = {}
+    checking.value = {}
   } catch (e) {
+    if (!projectsGen.isCurrent(token)) return
     toast(e, '加载项目失败')
   } finally {
-    loading.value = false
+    if (projectsGen.isCurrent(token)) loading.value = false
   }
 }
 

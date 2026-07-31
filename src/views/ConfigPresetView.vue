@@ -17,6 +17,7 @@ import { api } from '../api/svn'
 import { useWorkingCopiesStore } from '../stores/workingCopies'
 import { useErrorToast } from '../composables/use-error-toast'
 import { useAppToast } from '../composables/use-app-toast'
+import { createGeneration } from '../composables/use-request-generation'
 import { confirm } from '../composables/use-confirm-dialog'
 import type { ConfigPreset, PresetApplyPlan, Project } from '../types/svn'
 
@@ -28,14 +29,18 @@ const wcStore = useWorkingCopiesStore()
 
 const projects = ref<Project[]>([])
 const presets = ref<ConfigPreset[]>([])
+const projectsGen = createGeneration()
 
-// 左侧增删/扫描工作副本后，项目结构会变，实时刷新下拉选项（本视图常驻挂载）
+// 左侧增删、扫描或重新识别工作副本后，实时刷新应用目标。
 watch(
-  () => wcStore.items.length,
+  () => wcStore.projectTopologyVersion,
   async () => {
+    const token = projectsGen.next()
     try {
-      projects.value = await api.listProjects()
+      const nextProjects = await wcStore.listProjects()
+      if (projectsGen.isCurrent(token)) projects.value = nextProjects
     } catch (e) {
+      if (!projectsGen.isCurrent(token)) return
       toast(e, '刷新项目列表失败')
     }
   },
@@ -80,7 +85,9 @@ onMounted(load)
 
 async function load() {
   try {
-    projects.value = await api.listProjects()
+    const token = projectsGen.next()
+    const nextProjects = await wcStore.listProjects()
+    if (projectsGen.isCurrent(token)) projects.value = nextProjects
     presets.value = await api.listConfigPresets()
     // 给目标下拉一个初值，让占位文案可见而不是空白控件面
     for (const p of presets.value) {
