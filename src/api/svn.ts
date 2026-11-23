@@ -130,8 +130,8 @@ export const api = {
     invoke<SvnStatusEntry[]>('svn_get_status', { path, showUnversioned, showIgnored }),
   listUnversionedTree: (paths: string[]) =>
     invoke<UnversionedTreeEntry[]>('list_unversioned_tree', { paths }),
-  statusSummary: (path: string) =>
-    invoke<WorkingCopyStatusSummary>('svn_get_status_summary', { path }),
+  statusSummary: (path: string, checkUpdates = true) =>
+    invoke<WorkingCopyStatusSummary>('svn_get_status_summary', { path, checkUpdates }),
   statusStream: (path: string, showUnversioned = true, showIgnored = false, requestId: string) =>
     invoke<string>('svn_get_status_stream', { path, showUnversioned, showIgnored, requestId }),
   log: (params: {
@@ -174,6 +174,9 @@ export const api = {
   cancelTask: (taskId: string) => invoke<boolean>('svn_cancel_task', { taskId }),
   // 清理工作副本残留锁（终止任务后 E155004），完成后才返回
   cleanup: (path: string) => invoke<void>('svn_cleanup', { path }),
+  // 长任务在后台完成时发送系统原生通知
+  notify: (title: string, body: string) =>
+    invoke<void>('send_system_notification', { title, body }),
 }
 
 export function describeError(err: unknown): string {

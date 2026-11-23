@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use tauri::{AppHandle, State};
+use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
@@ -1166,10 +1167,16 @@ pub async fn svn_get_status(
 pub async fn svn_get_status_summary(
     state: State<'_, ConfigState>,
     path: String,
+    check_updates: Option<bool>,
 ) -> AppResult<WorkingCopyStatusSummary> {
     let bin = state.svn_bin();
+    let with_updates = check_updates.unwrap_or(true);
     tauri::async_runtime::spawn_blocking(move || {
-        let entries = svn_status_with_updates(&bin, &path, true, false)?;
+        let entries = if with_updates {
+            svn_status_with_updates(&bin, &path, true, false)?
+        } else {
+            svn_status(&bin, &path, true, false)?
+        };
         let mut uncommitted = 0;
         let mut outdated = 0;
         for entry in entries {
@@ -1183,18 +1190,20 @@ pub async fn svn_get_status_summary(
                 uncommitted += 1;
             }
 
-            let repos_props_changed = !matches!(
-                entry.repos_props.as_deref().unwrap_or("none"),
-                "normal" | "none"
-            );
-            let repos_changed = entry
-                .repos_item
-                .as_deref()
-                .map(|item| !matches!(item, "normal" | "none"))
-                .unwrap_or(false)
-                || repos_props_changed;
-            if repos_changed {
-                outdated += 1;
+            if with_updates {
+                let repos_props_changed = !matches!(
+                    entry.repos_props.as_deref().unwrap_or("none"),
+                    "normal" | "none"
+                );
+                let repos_changed = entry
+                    .repos_item
+                    .as_deref()
+                    .map(|item| !matches!(item, "normal" | "none"))
+                    .unwrap_or(false)
+                    || repos_props_changed;
+                if repos_changed {
+                    outdated += 1;
+                }
             }
         }
         Ok(WorkingCopyStatusSummary {
@@ -1586,4 +1595,10 @@ pub async fn svn_cleanup(state: State<'_, ConfigState>, path: String) -> AppResu
     })
     .await
     .map_err(|e| AppError::Other(format!("cleanup 执行线程异常: {e}")))?
+}
+
+/// 发送系统原生通知（用于长任务在后台完成时提醒用户，忽略权限拒绝等异常）
+#[tauri::command]
+pub fn send_system_notification(app: AppHandle, title: String, body: String) {
+    let _ = app.notification().builder().title(&title).body(&body).show();
 }

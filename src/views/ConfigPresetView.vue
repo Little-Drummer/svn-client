@@ -21,7 +21,10 @@ import { createGeneration } from '../composables/use-request-generation'
 import { confirm } from '../composables/use-confirm-dialog'
 import type { ConfigPreset, PresetApplyPlan, Project } from '../types/svn'
 
-const props = defineProps<{ activeProjectName?: string | null }>()
+const props = defineProps<{
+  activeProjectName?: string | null
+  overrideProjectName?: string | null
+}>()
 
 const toast = useErrorToast()
 const appToast = useAppToast()
@@ -74,9 +77,39 @@ const targetGroups = computed(() => {
   return [...groups.entries()].map(([project, targets]) => ({ project, targets }))
 })
 
-// 默认目标优先取当前选中工作副本所属项目的第一个模块
+// 按「总览显式指定 > 左侧选中工作副本精确匹配 > 路径推断项目名」解析当前项目
+function resolveActiveProjectName(): string | null {
+  if (props.overrideProjectName && projects.value.some((p) => p.name === props.overrideProjectName)) {
+    return props.overrideProjectName
+  }
+  const selectedId = wcStore.selectedId
+  const selectedPath = wcStore.selected?.path
+  if (selectedId || selectedPath) {
+    const matched = projects.value.find((project) =>
+      project.branches.some((branch) =>
+        branch.modules.some(
+          (m) =>
+            (!!selectedId && m.workingCopyId === selectedId) ||
+            (!!selectedPath && m.path === selectedPath),
+        ),
+      ),
+    )
+    if (matched) return matched.name
+  }
+  if (props.activeProjectName && projects.value.some((p) => p.name === props.activeProjectName)) {
+    return props.activeProjectName
+  }
+  return null
+}
+
+// 默认目标优先命中当前选中的工作副本模块，其次取所属项目的第一个模块
 function defaultTargetPath(): string {
-  const want = props.activeProjectName
+  const selectedPath = wcStore.selected?.path
+  if (!props.overrideProjectName && selectedPath) {
+    const exact = moduleTargets.value.find((t) => t.path === selectedPath)
+    if (exact) return exact.path
+  }
+  const want = resolveActiveProjectName()
   const hit = want ? moduleTargets.value.find((t) => t.project === want) : undefined
   return (hit ?? moduleTargets.value[0])?.path ?? ''
 }

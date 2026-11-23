@@ -392,7 +392,10 @@ function onRepositorySelect() {
           />
         </TabsContent>
         <TabsContent value="config" class="tab-pane" force-mount>
-          <ConfigPresetView :active-project-name="activeProjectName" />
+          <ConfigPresetView
+            :active-project-name="activeProjectName"
+            :override-project-name="overrideProject"
+          />
         </TabsContent>
       </Tabs>
 

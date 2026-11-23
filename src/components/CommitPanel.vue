@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea'
 import EmptyState from '@/components/ui-local/EmptyState.vue'
 import { confirm } from '@/composables/use-confirm-dialog'
 import { getDecodedUrl } from '@/lib/utils'
+import { loadCommitHistory, pushCommitHistory } from '@/lib/ui-state'
 import TaskOutput from './TaskOutput.vue'
 import { api } from '../api/svn'
 import { useTasksStore } from '../stores/tasks'
@@ -27,8 +28,22 @@ const tasksStore = useTasksStore()
 const toast = useErrorToast()
 
 const message = ref('')
+const commitHistory = ref<string[]>(loadCommitHistory())
+const selectedHistory = ref('')
+let lastSubmittedMessage = ''
 const taskId = ref<string | null>(null)
 const preparing = ref(false)
+
+function applyHistoryMessage() {
+  if (!selectedHistory.value) return
+  message.value = selectedHistory.value
+  selectedHistory.value = ''
+}
+
+function historyOptionLabel(text: string): string {
+  const firstLine = text.replace(/\s+/g, ' ').trim()
+  return firstLine.length > 42 ? `${firstLine.slice(0, 42)}…` : firstLine
+}
 const draftKey = computed(() => `svn-client.commit-draft.${props.workingCopy.id}`)
 const submitting = computed(() => {
   if (!taskId.value) return false
@@ -104,7 +119,9 @@ async function submit() {
     if (unversionedPaths.length > 0) {
       await api.add(unversionedPaths)
     }
-    taskId.value = await launchCommit(paths, message.value.trim())
+    const trimmedMessage = message.value.trim()
+    lastSubmittedMessage = trimmedMessage
+    taskId.value = await launchCommit(paths, trimmedMessage)
   } catch (e) {
     toast(e, '启动提交失败')
   } finally {
@@ -132,6 +149,11 @@ watch(
     if (finished) {
       const t = taskId.value ? tasksStore.tasks.get(taskId.value) : null
       if (t?.success) {
+        const committed = lastSubmittedMessage || message.value.trim()
+        if (committed) {
+          commitHistory.value = pushCommitHistory(committed)
+        }
+        lastSubmittedMessage = ''
         message.value = ''
         localStorage.removeItem(draftKey.value)
         emit('done')
@@ -165,6 +187,20 @@ watch(
         <FileCheck2 class="selected-file-icon" />
         <span class="selected-file-name mono">{{ shortPath(path) }}</span>
       </div>
+    </div>
+
+    <div v-if="commitHistory.length > 0" class="history-row">
+      <select
+        v-model="selectedHistory"
+        class="ui-select history-select"
+        :disabled="submitting"
+        @change="applyHistoryMessage"
+      >
+        <option value="" disabled hidden>从最近提交历史填入…</option>
+        <option v-for="(item, idx) in commitHistory" :key="idx" :value="item">
+          {{ historyOptionLabel(item) }}
+        </option>
+      </select>
     </div>
 
     <Textarea
@@ -256,6 +292,14 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--fs-caption);
+}
+.history-row {
+  display: flex;
+  align-items: center;
+}
+.history-select {
+  width: 100%;
   font-size: var(--fs-caption);
 }
 .commit-message {

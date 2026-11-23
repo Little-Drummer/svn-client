@@ -2,6 +2,7 @@ use std::io::BufReader;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use quick_xml::events::Event;
 use quick_xml::writer::Writer;
@@ -11,7 +12,10 @@ use serde::Deserialize;
 use crate::errors::{AppError, AppResult};
 use crate::models::SvnStatusEntry;
 
-use super::runner::{decode_output, run_svn};
+use super::runner::{decode_output, run_svn, run_svn_with_timeout};
+
+/// 远端状态检查（svn status -u）超时时间，断网或 VPN 断开时快速失败不卡队列
+const REMOTE_STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Deserialize)]
 struct StatusRoot {
@@ -103,7 +107,11 @@ fn svn_status_with_options(
     }
     args.push(target);
 
-    let out = run_svn(svn_bin, &args)?;
+    let out = if check_updates {
+        run_svn_with_timeout(svn_bin, &args, REMOTE_STATUS_TIMEOUT)?
+    } else {
+        run_svn(svn_bin, &args)?
+    };
     let parsed: StatusRoot = quick_xml::de::from_str(&out.stdout)?;
 
     let mut result = Vec::new();

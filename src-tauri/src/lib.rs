@@ -148,6 +148,7 @@ pub fn run() {
             commands::svn_start_checkout,
             commands::svn_cancel_task,
             commands::svn_cleanup,
+            commands::send_system_notification,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

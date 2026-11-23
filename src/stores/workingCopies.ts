@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 
 import { api } from '../api/svn'
 import { loadFocus, saveFocus } from '../lib/ui-state'
-import type { WorkingCopyEntry } from '../types/svn'
+import type { Project, WorkingCopyEntry } from '../types/svn'
 
 export const useWorkingCopiesStore = defineStore('workingCopies', () => {
   const items = ref<WorkingCopyEntry[]>([])
@@ -86,9 +86,32 @@ export const useWorkingCopiesStore = defineStore('workingCopies', () => {
     return touched
   }
 
-  // 把当前工作副本聚合成 项目 → 环境(分支) → 模块 视图（供合并/打包使用）
-  function listProjects() {
-    return api.listProjects()
+  // 按 projectTopologyVersion 缓存聚合后的项目列表，避免多个常驻页签重复发 IPC
+  const projects = ref<Project[]>([])
+  let cachedProjectsVersion = -1
+  let projectsInflight: { version: number; promise: Promise<Project[]> } | null = null
+
+  // 把当前工作副本聚合成 项目 → 环境(分支) → 模块 视图（供合并/打包/配置/总览共享）
+  function listProjects(force = false): Promise<Project[]> {
+    const version = projectTopologyVersion.value
+    if (!force && cachedProjectsVersion === version) {
+      return Promise.resolve(projects.value)
+    }
+    if (!force && projectsInflight && projectsInflight.version === version) {
+      return projectsInflight.promise
+    }
+    const promise = api.listProjects().then((result) => {
+      if (projectTopologyVersion.value === version) {
+        projects.value = result
+        cachedProjectsVersion = version
+      }
+      if (projectsInflight?.promise === promise) {
+        projectsInflight = null
+      }
+      return result
+    })
+    projectsInflight = { version, promise }
+    return promise
   }
 
   async function remove(id: string) {

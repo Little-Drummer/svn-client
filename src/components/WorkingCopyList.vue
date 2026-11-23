@@ -62,6 +62,8 @@ const collapsedNodes = ref<Set<string>>(new Set(loadCollapsedNodes()))
 
 interface WorkingCopySummaryState extends WorkingCopyStatusSummary {
   loading: boolean
+  localLoading: boolean
+  remoteLoading: boolean
   error: boolean
 }
 
@@ -290,8 +292,12 @@ function hasSummaryValue(summary: WorkingCopySummaryState | undefined) {
 
 function summaryTitle(summary: WorkingCopySummaryState | undefined) {
   if (!summary) return '正在统计工作副本状态'
-  if (summary.error) return '状态统计失败，右键刷新后会重新读取'
-  if (summary.loading) return '正在统计工作副本状态'
+  if (summary.error && summary.uncommitted > 0) {
+    return `本地未提交 ${summary.uncommitted}；远端检查失败或超时，右键刷新重试`
+  }
+  if (summary.error) return '远端状态检查失败或超时，右键刷新重试'
+  if (summary.localLoading) return '正在统计工作副本状态'
+  if (summary.remoteLoading) return `未提交 ${summary.uncommitted}，正在检查远端更新…`
   return `未提交 ${summary.uncommitted}，未更新 ${summary.outdated}`
 }
 
@@ -317,7 +323,7 @@ function syncSummaryCacheWithItems(list: WorkingCopyEntry[]) {
     if (!wc) continue
     next[id] =
       wc.available === false
-        ? { uncommitted: 0, outdated: 0, loading: false, error: false }
+        ? { uncommitted: 0, outdated: 0, loading: false, localLoading: false, remoteLoading: false, error: false }
         : state
   }
   summaryById.value = next
@@ -342,13 +348,27 @@ function enqueueVisibleSummaries(copies: WorkingCopyEntry[]) {
   for (const wc of copies) {
     if (wc.available === false) {
       if (!next[wc.id]) {
-        next[wc.id] = { uncommitted: 0, outdated: 0, loading: false, error: false }
+        next[wc.id] = {
+          uncommitted: 0,
+          outdated: 0,
+          loading: false,
+          localLoading: false,
+          remoteLoading: false,
+          error: false,
+        }
         added = true
       }
       continue
     }
     if (next[wc.id] || queuedSummaryIds.has(wc.id)) continue
-    next[wc.id] = { uncommitted: 0, outdated: 0, loading: true, error: false }
+    next[wc.id] = {
+      uncommitted: 0,
+      outdated: 0,
+      loading: true,
+      localLoading: true,
+      remoteLoading: true,
+      error: false,
+    }
     queuedSummaryIds.add(wc.id)
     pendingSummaryQueue.push(wc)
     added = true
@@ -410,42 +430,71 @@ function scheduleSummaryReload(id: string) {
   summaryReloadTimers.set(id, timer)
 }
 
-// 单副本请求独立编号，连续刷新时只接受最后一次返回结果。
+// 两阶段拉取状态：先毫秒级读取本地未提交数，再异步补齐远端未更新数（带超时保护）；
+// 远端失败时保留本地改动数，不因网络抖动丢失本地提示。
 async function reloadSummary(wc: WorkingCopyEntry) {
   const requestVersion = (summaryRequestVersions.get(wc.id) ?? 0) + 1
   summaryRequestVersions.set(wc.id, requestVersion)
+  const isStale = () =>
+    summaryRequestVersions.get(wc.id) !== requestVersion ||
+    !store.items.some((item) => item.id === wc.id)
+
+  const prev = summaryById.value[wc.id] ?? { uncommitted: 0, outdated: 0 }
   summaryById.value = {
     ...summaryById.value,
     [wc.id]: {
-      ...(summaryById.value[wc.id] ?? { uncommitted: 0, outdated: 0 }),
+      uncommitted: prev.uncommitted,
+      outdated: prev.outdated,
       loading: true,
+      localLoading: true,
+      remoteLoading: true,
       error: false,
     },
   }
+
+  let localUncommitted = prev.uncommitted
   try {
-    const summary = await api.statusSummary(wc.path)
-    if (
-      summaryRequestVersions.get(wc.id) !== requestVersion ||
-      !store.items.some((item) => item.id === wc.id)
-    ) {
-      return
-    }
-    summaryById.value = {
-      ...summaryById.value,
-      [wc.id]: { ...summary, loading: false, error: false },
-    }
-  } catch {
-    if (
-      summaryRequestVersions.get(wc.id) !== requestVersion ||
-      !store.items.some((item) => item.id === wc.id)
-    ) {
-      return
-    }
+    const localSummary = await api.statusSummary(wc.path, false)
+    if (isStale()) return
+    localUncommitted = localSummary.uncommitted
     summaryById.value = {
       ...summaryById.value,
       [wc.id]: {
-        ...(summaryById.value[wc.id] ?? { uncommitted: 0, outdated: 0 }),
+        uncommitted: localUncommitted,
+        outdated: prev.outdated,
+        loading: true,
+        localLoading: false,
+        remoteLoading: true,
+        error: false,
+      },
+    }
+  } catch {
+    // 本地读取失败直接进入远端阶段兜底
+  }
+
+  try {
+    const fullSummary = await api.statusSummary(wc.path, true)
+    if (isStale()) return
+    summaryById.value = {
+      ...summaryById.value,
+      [wc.id]: {
+        ...fullSummary,
         loading: false,
+        localLoading: false,
+        remoteLoading: false,
+        error: false,
+      },
+    }
+  } catch {
+    if (isStale()) return
+    summaryById.value = {
+      ...summaryById.value,
+      [wc.id]: {
+        uncommitted: localUncommitted,
+        outdated: 0,
+        loading: false,
+        localLoading: false,
+        remoteLoading: false,
         error: true,
       },
     }
@@ -595,13 +644,14 @@ function toggleAllProjects() {
   persistCollapsedNodes(new Set(tree.value.map((project) => project.key)))
 }
 
-// ===== 右键菜单 =====
+// ===== 右键菜单（支持工作副本与项目/分支分组行）=====
 const ctxOpen = ref(false)
 const ctxX = ref(0)
 const ctxY = ref(0)
 const ctxWc = ref<WorkingCopyEntry | null>(null)
+const ctxNode = ref<WorkingCopyTreeNode | null>(null)
 
-const ctxItems: ContextMenuItem[] = [
+const wcCtxItems: ContextMenuItem[] = [
   { key: 'log', label: '查看日志', icon: ScrollText },
   { key: 'refresh', label: '重新读取 svn info', icon: RefreshCw },
   { key: 'edit', label: '编辑显示名称', icon: Pencil },
@@ -613,15 +663,137 @@ const ctxItems: ContextMenuItem[] = [
   { key: 'remove', label: '从列表移除', icon: Trash2, danger: true },
 ]
 
+function collectNodeCopies(node: WorkingCopyTreeNode): WorkingCopyEntry[] {
+  return [...node.copies, ...node.children.flatMap(collectNodeCopies)]
+}
+
+// 计算分组下所有工作副本的公共目录（用于「在访达/终端中打开目录」）
+function commonDirectoryForNode(node: WorkingCopyTreeNode): string | null {
+  const copies = collectNodeCopies(node).filter((wc) => wc.available !== false)
+  if (copies.length === 0) return null
+  if (copies.length === 1) {
+    const p = copies[0].path.replace(/[\\/]+$/, '')
+    const sepIdx = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+    return sepIdx > 0 ? p.slice(0, sepIdx) : p
+  }
+  const splitList = copies.map((wc) => wc.path.split(/[\\/]/))
+  const minLen = Math.min(...splitList.map((parts) => parts.length))
+  const common: string[] = []
+  for (let i = 0; i < minLen; i++) {
+    const seg = splitList[0][i]
+    if (splitList.every((parts) => parts[i] === seg)) {
+      common.push(seg)
+    } else {
+      break
+    }
+  }
+  if (common.length === 0) return null
+  const joined = common.join('/')
+  return copies[0].path.startsWith('/') ? (joined.startsWith('/') ? joined : `/${joined}`) : joined
+}
+
+const activeCtxItems = computed<ContextMenuItem[]>(() => {
+  const node = ctxNode.value
+  if (!node) return wcCtxItems
+  const needsExpand = nodeKeys(node).some((key) => collapsedNodes.value.has(key))
+  const dir = commonDirectoryForNode(node)
+  const items: ContextMenuItem[] = [
+    { key: 'node-refresh-summary', label: '刷新该分组状态', icon: RefreshCw },
+    {
+      key: 'node-toggle-expand',
+      label: needsExpand ? '展开全部分支' : '收起该分组',
+      icon: needsExpand ? FolderOpen : FolderMinus,
+    },
+  ]
+  if (dir) {
+    items.push(
+      { key: 'sep-node', separator: true, label: '' },
+      { key: 'node-reveal', label: '在访达中打开目录', icon: FolderSearch },
+      { key: 'node-terminal', label: '在终端中打开目录', icon: SquareTerminal },
+    )
+  }
+  return items
+})
+
 function openContextMenu(event: MouseEvent, wc: WorkingCopyEntry) {
   selectWc(wc.id)
+  ctxNode.value = null
   ctxWc.value = wc
   ctxX.value = event.clientX
   ctxY.value = event.clientY
   ctxOpen.value = true
 }
 
+function openNodeContextMenu(event: MouseEvent, node: WorkingCopyTreeNode) {
+  selectNode(node)
+  ctxWc.value = null
+  ctxNode.value = node
+  ctxX.value = event.clientX
+  ctxY.value = event.clientY
+  ctxOpen.value = true
+}
+
+async function refreshNodeSummaries(node: WorkingCopyTreeNode) {
+  // 若该分组处于折叠状态，先展开所有子节点再刷新状态，让用户立即看到结果
+  const nextCollapsed = new Set(collapsedNodes.value)
+  let changed = false
+  for (const key of nodeKeys(node)) {
+    if (nextCollapsed.delete(key)) changed = true
+  }
+  if (changed) persistCollapsedNodes(nextCollapsed)
+
+  const copies = collectNodeCopies(node).filter((wc) => wc.available !== false)
+  // 清除旧缓存并重新入队，按并发池有序刷新
+  const nextSummary = { ...summaryById.value }
+  for (const wc of copies) {
+    delete nextSummary[wc.id]
+  }
+  summaryById.value = nextSummary
+  enqueueVisibleSummaries(copies)
+}
+
 async function onCtxSelect(key: string) {
+  const node = ctxNode.value
+  if (node) {
+    switch (key) {
+      case 'node-refresh-summary':
+        await refreshNodeSummaries(node)
+        break
+      case 'node-toggle-expand': {
+        const next = new Set(collapsedNodes.value)
+        const needsExpand = nodeKeys(node).some((k) => next.has(k))
+        if (needsExpand) {
+          for (const k of nodeKeys(node)) next.delete(k)
+        } else {
+          next.add(node.key)
+        }
+        persistCollapsedNodes(next)
+        break
+      }
+      case 'node-reveal': {
+        const dir = commonDirectoryForNode(node)
+        if (!dir) break
+        try {
+          await api.revealInFileManager(dir)
+        } catch (e) {
+          toast(e, '在访达中打开失败')
+        }
+        break
+      }
+      case 'node-terminal': {
+        const dir = commonDirectoryForNode(node)
+        if (!dir) break
+        try {
+          await api.openInTerminal(dir)
+        } catch (e) {
+          toast(e, '在终端中打开失败')
+        }
+        break
+      }
+    }
+    return
+  }
+
   const wc = ctxWc.value
   if (!wc) return
   switch (key) {
@@ -788,6 +960,7 @@ function cancelEdit() {
           :style="{ paddingLeft: rowIndent(row.depth) }"
           type="button"
           @click="selectNode(row.node)"
+          @contextmenu.prevent="openNodeContextMenu($event, row.node)"
         >
           <ChevronDown
             :class="['root-chevron', { collapsed: collapsedNodes.has(row.node.key) }]"
@@ -862,30 +1035,30 @@ function cancelEdit() {
                 :title="summaryTitle(summaryById[row.wc.id])"
               >
                 <button
-                  v-if="summaryById[row.wc.id]?.uncommitted || summaryById[row.wc.id]?.loading"
+                  v-if="summaryById[row.wc.id]?.uncommitted || summaryById[row.wc.id]?.localLoading"
                   type="button"
                   :class="[
                     'summary-chip',
                     'summary-local',
                     'summary-local-button',
-                    { skeleton: summaryById[row.wc.id]?.loading },
+                    { skeleton: summaryById[row.wc.id]?.localLoading },
                   ]"
-                  :disabled="summaryById[row.wc.id]?.loading"
+                  :disabled="summaryById[row.wc.id]?.localLoading"
                   :aria-label="`查看 ${summaryById[row.wc.id]?.uncommitted || 0} 个本地更改文件`"
                   title="查看本地更改文件"
                   data-local-changes-trigger
                   @click.stop="openLocalChanges($event, row.wc)"
                 >
                   <span class="summary-number mono">
-                    {{ summaryById[row.wc.id]?.loading ? '' : summaryById[row.wc.id]?.uncommitted }}
+                    {{ summaryById[row.wc.id]?.localLoading ? '' : summaryById[row.wc.id]?.uncommitted }}
                   </span>
                 </button>
                 <span
-                  v-if="summaryById[row.wc.id]?.outdated || summaryById[row.wc.id]?.loading"
-                  :class="['summary-chip', 'summary-remote', { skeleton: summaryById[row.wc.id]?.loading }]"
+                  v-if="summaryById[row.wc.id]?.outdated || summaryById[row.wc.id]?.remoteLoading"
+                  :class="['summary-chip', 'summary-remote', { skeleton: summaryById[row.wc.id]?.remoteLoading }]"
                 >
                   <span class="summary-number mono">
-                    {{ summaryById[row.wc.id]?.loading ? '' : summaryById[row.wc.id]?.outdated }}
+                    {{ summaryById[row.wc.id]?.remoteLoading ? '' : summaryById[row.wc.id]?.outdated }}
                   </span>
                 </span>
                 <span v-if="summaryById[row.wc.id]?.error" class="summary-chip summary-error mono">!</span>
@@ -900,7 +1073,7 @@ function cancelEdit() {
       v-model:open="ctxOpen"
       :x="ctxX"
       :y="ctxY"
-      :items="ctxItems"
+      :items="activeCtxItems"
       @select="onCtxSelect"
     />
     <WorkingCopyChangesPopover

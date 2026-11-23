@@ -45,11 +45,11 @@ watch(
   { immediate: true },
 )
 
-async function load() {
+async function load(force = false) {
   const token = projectsGen.next()
   loading.value = true
   try {
-    const nextProjects = await wcStore.listProjects()
+    const nextProjects = await wcStore.listProjects(force)
     if (!projectsGen.isCurrent(token)) return
     projects.value = nextProjects
     // 项目结构变化后旧路径的检查结果不再可靠。
@@ -79,19 +79,22 @@ function branchSummary(project: Project) {
   }))
 }
 
+// 并发检查该项目下所有分支的 rest 模块改动数，避免串行等待
 async function checkProject(project: Project) {
-  for (const rest of restModules(project)) {
-    checking.value = { ...checking.value, [rest.path]: true }
-    try {
-      const entries = await api.status(rest.path, false)
-      const changed = entries.filter((e) => e.item !== 'normal' && e.item !== 'unversioned').length
-      dirtyCounts.value = { ...dirtyCounts.value, [rest.path]: changed }
-    } catch {
-      dirtyCounts.value = { ...dirtyCounts.value, [rest.path]: -1 }
-    } finally {
-      checking.value = { ...checking.value, [rest.path]: false }
-    }
-  }
+  await Promise.all(
+    restModules(project).map(async (rest) => {
+      checking.value = { ...checking.value, [rest.path]: true }
+      try {
+        const entries = await api.status(rest.path, false)
+        const changed = entries.filter((e) => e.item !== 'normal' && e.item !== 'unversioned').length
+        dirtyCounts.value = { ...dirtyCounts.value, [rest.path]: changed }
+      } catch {
+        dirtyCounts.value = { ...dirtyCounts.value, [rest.path]: -1 }
+      } finally {
+        checking.value = { ...checking.value, [rest.path]: false }
+      }
+    }),
+  )
 }
 
 function dirtyLabel(path: string): { text: string; tone: 'clean' | 'dirty' | 'unknown' | 'error' } {
@@ -114,7 +117,7 @@ function dirtyLabel(path: string): { text: string; tone: 'clean' | 'dirty' | 'un
         </template>
       </div>
       <span class="spacer" />
-      <Button size="xs" variant="ghost" :disabled="loading" @click="load">
+      <Button size="xs" variant="ghost" :disabled="loading" @click="load(true)">
         <RefreshCw class="icon-xs" :class="{ spin: loading }" /> 刷新
       </Button>
     </div>

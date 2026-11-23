@@ -116,6 +116,11 @@ export const useTasksStore = defineStore('tasks', () => {
           success: ev.success,
           version: ++completedTaskVersion,
         }
+        // 窗口不在前台且非手动取消时，发送系统原生通知提醒任务结果
+        if (!t.canceled && typeof document !== 'undefined' && !document.hasFocus()) {
+          const heading = ev.success ? 'SVN 任务已完成' : 'SVN 任务执行失败'
+          void api.notify(heading, t.title).catch(() => {})
+        }
         break
     }
   }

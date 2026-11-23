@@ -10,6 +10,8 @@ export interface FocusState {
 
 const FOCUS_KEY = 'ui.lastFocus'
 const WC_COLLAPSED_KEY = 'ui.wcCollapsedNodes'
+const COMMIT_HISTORY_KEY = 'ui.commitHistory'
+const MAX_COMMIT_HISTORY = 15
 
 export function loadFocus(): FocusState | null {
   try {
@@ -57,4 +59,34 @@ export function saveCollapsedNodes(keys: string[]): void {
   } catch {
     // 同上
   }
+}
+
+export function loadCommitHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(COMMIT_HISTORY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    }
+  } catch {
+    // 解析失败按空历史处理
+  }
+  return []
+}
+
+// 记录最近提交说明：去重并置于最前，最多保留 MAX_COMMIT_HISTORY 条
+export function pushCommitHistory(message: string): string[] {
+  const trimmed = message.trim()
+  if (!trimmed) return loadCommitHistory()
+  const next = [trimmed, ...loadCommitHistory().filter((item) => item !== trimmed)].slice(
+    0,
+    MAX_COMMIT_HISTORY,
+  )
+  try {
+    localStorage.setItem(COMMIT_HISTORY_KEY, JSON.stringify(next))
+  } catch {
+    // 持久化失败不影响提交流程
+  }
+  return next
 }
