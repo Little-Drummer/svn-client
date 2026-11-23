@@ -39,6 +39,8 @@ const wcStore = useWorkingCopiesStore()
 const tab = ref<'overview' | 'status' | 'log' | 'merge' | 'package' | 'config'>('status')
 // 从总览看板跳转时临时指定项目，覆盖「跟随选中工作副本」的默认行为
 const overrideProject = ref<string | null>(null)
+// 每次点击左侧项目/副本或从总览跳转时递增，通知合并/打包页重新对齐目标项目
+const projectSelectionVersion = ref(0)
 const toast = useAppToast()
 
 // 侧栏「远端仓库」区高度可拖拽调整：远端少、本地多时把空间让给工作副本列表
@@ -177,6 +179,7 @@ const activeProjectName = computed(
 // 总览看板点「合并/打包/配置」：切到对应 tab 并把目标项目带过去
 function onBoardNavigate(target: 'merge' | 'package' | 'config', projectName: string) {
   overrideProject.value = projectName
+  projectSelectionVersion.value += 1
   tab.value = target
 }
 
@@ -248,8 +251,9 @@ watch(
 
 function onWorkingCopySelect() {
   repoStore.select(null)
-  // 用户手动选了工作副本，恢复「面板跟随选中项目」
+  // 用户手动选了工作副本，恢复「面板跟随选中项目」并强制同步合并/打包页
   overrideProject.value = null
+  projectSelectionVersion.value += 1
 }
 
 // 选中远端仓库时清掉工作副本选中，保持两侧焦点互斥
@@ -374,10 +378,18 @@ function onRepositorySelect() {
           <div v-else class="empty-pane">先在左侧添加并选择一个工作副本</div>
         </TabsContent>
         <TabsContent value="merge" class="tab-pane" force-mount>
-          <MergeView :active-project-name="activeProjectName" />
+          <MergeView
+            :active-project-name="activeProjectName"
+            :override-project-name="overrideProject"
+            :selection-version="projectSelectionVersion"
+          />
         </TabsContent>
         <TabsContent value="package" class="tab-pane" force-mount>
-          <PackageView :active-project-name="activeProjectName" />
+          <PackageView
+            :active-project-name="activeProjectName"
+            :override-project-name="overrideProject"
+            :selection-version="projectSelectionVersion"
+          />
         </TabsContent>
         <TabsContent value="config" class="tab-pane" force-mount>
           <ConfigPresetView :active-project-name="activeProjectName" />

@@ -16,7 +16,11 @@ import { useAppToast } from '../composables/use-app-toast'
 import { createGeneration } from '../composables/use-request-generation'
 import type { PackageBuildResult, PackageRevision, PackageZipResult, Project } from '../types/svn'
 
-const props = defineProps<{ activeProjectName?: string | null }>()
+const props = defineProps<{
+  activeProjectName?: string | null
+  overrideProjectName?: string | null
+  selectionVersion?: number
+}>()
 
 const toast = useErrorToast()
 const appToast = useAppToast()
@@ -53,6 +57,7 @@ const committing = ref(false)
 const committed = ref(false)
 const projectsGen = createGeneration()
 let appliedActiveProjectName: string | null = null
+let lastAppliedSelectionVersion = -1
 
 const filteredRevisions = computed(() => {
   const kw = filter.value.trim().toLowerCase()
@@ -77,6 +82,31 @@ watch(
   { immediate: true },
 )
 
+// 按「总览显式指定 > 左侧选中工作副本精确匹配 > 路径推断项目名」解析目标项目
+function resolveTargetProjectName(projectList: Project[]): string | null {
+  if (props.overrideProjectName && projectList.some((p) => p.name === props.overrideProjectName)) {
+    return props.overrideProjectName
+  }
+  const selectedId = wcStore.selectedId
+  const selectedPath = wcStore.selected?.path
+  if (selectedId || selectedPath) {
+    const matched = projectList.find((project) =>
+      project.branches.some((branch) =>
+        branch.modules.some(
+          (m) =>
+            (!!selectedId && m.workingCopyId === selectedId) ||
+            (!!selectedPath && m.path === selectedPath),
+        ),
+      ),
+    )
+    if (matched) return matched.name
+  }
+  if (props.activeProjectName && projectList.some((p) => p.name === props.activeProjectName)) {
+    return props.activeProjectName
+  }
+  return null
+}
+
 async function loadProjects() {
   const token = projectsGen.next()
   try {
@@ -86,18 +116,22 @@ async function loadProjects() {
     if (!projectsGen.isCurrent(token)) return
     projects.value = nextProjects
     const current = nextProjects.find((project) => project.name === previousName)
-    const active = props.activeProjectName
-      ? nextProjects.find((project) => project.name === props.activeProjectName)
-      : null
-    const shouldApplyActive = !!active && active.name !== appliedActiveProjectName
+    const targetName = resolveTargetProjectName(nextProjects)
+    const currentSelectionVersion = props.selectionVersion ?? 0
+    const shouldApplyActive =
+      !!targetName &&
+      (targetName !== appliedActiveProjectName || currentSelectionVersion !== lastAppliedSelectionVersion)
     const nextName =
-      (shouldApplyActive ? active?.name : null) ?? current?.name ?? active?.name ?? nextProjects[0]?.name ?? ''
+      (shouldApplyActive ? targetName : null) ?? current?.name ?? targetName ?? nextProjects[0]?.name ?? ''
     const nextProject = nextProjects.find((project) => project.name === nextName)
     const currentStructureChanged =
       previousName !== nextName ||
       JSON.stringify(previousProject ?? null) !== JSON.stringify(nextProject ?? null)
     projectName.value = nextName
-    if (active?.name === nextName) appliedActiveProjectName = active.name
+    if (targetName && targetName === nextName) {
+      appliedActiveProjectName = targetName
+      lastAppliedSelectionVersion = currentSelectionVersion
+    }
     if (currentStructureChanged) onProjectChange()
   } catch (e) {
     if (!projectsGen.isCurrent(token)) return
@@ -106,16 +140,24 @@ async function loadProjects() {
 }
 
 watch(
-  () => props.activeProjectName,
-  (name) => {
-    if (!name) {
-      appliedActiveProjectName = null
+  [
+    () => props.overrideProjectName,
+    () => props.activeProjectName,
+    () => wcStore.selectedId,
+    () => props.selectionVersion,
+  ],
+  () => {
+    const targetName = resolveTargetProjectName(projects.value)
+    if (!targetName) {
+      if (!props.overrideProjectName && !props.activeProjectName && !wcStore.selectedId) {
+        appliedActiveProjectName = null
+      }
       return
     }
-    if (!projects.value.some((p) => p.name === name)) return
-    appliedActiveProjectName = name
-    if (name === projectName.value) return
-    projectName.value = name
+    appliedActiveProjectName = targetName
+    lastAppliedSelectionVersion = props.selectionVersion ?? 0
+    if (targetName === projectName.value) return
+    projectName.value = targetName
     onProjectChange()
   },
 )

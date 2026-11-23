@@ -66,7 +66,10 @@ interface WorkingCopySummaryState extends WorkingCopyStatusSummary {
 }
 
 const summaryById = ref<Record<string, WorkingCopySummaryState>>({})
-let summaryGeneration = 0
+const SUMMARY_CONCURRENCY = 3
+const pendingSummaryQueue: WorkingCopyEntry[] = []
+const queuedSummaryIds = new Set<string>()
+let activeSummaryWorkers = 0
 const summaryRequestVersions = new Map<string, number>()
 const summaryReloadTimers = new Map<string, ReturnType<typeof window.setTimeout>>()
 const changesPopoverWc = ref<WorkingCopyEntry | null>(null)
@@ -167,6 +170,14 @@ const treeRows = computed(() => {
   return rows
 })
 
+// 仅提取当前已展开文件夹下可见的工作副本，用于启动及展开时按需拉取状态统计
+const visibleCopies = computed(() =>
+  treeRows.value
+    .filter((row): row is Extract<WorkingCopyTreeRow, { kind: 'copy' }> => row.kind === 'copy')
+    .map((row) => row.wc),
+)
+const visibleCopyIds = computed(() => new Set(visibleCopies.value.map((wc) => wc.id)))
+
 function resolveTreeSegment(segment: WorkingCopyTreeSegment): WorkingCopyTreeSegment {
   if (!segment.key.startsWith('repo:')) return segment
   const root = segment.key.slice(5)
@@ -228,10 +239,20 @@ onMounted(() => {
   store.reload().catch(toast)
 })
 
+// 列表增删或可用性变化时同步清理已移除/不可用副本的状态缓存，不主动扫描折叠项
 watch(
   items,
   (list) => {
-    void reloadSummaries(list)
+    syncSummaryCacheWithItems(list)
+  },
+  { immediate: true },
+)
+
+// 仅在启动时加载已展开文件夹的副本状态，折叠项等用户展开可见后再按需加载
+watch(
+  visibleCopies,
+  (copies) => {
+    enqueueVisibleSummaries(copies)
   },
   { immediate: true },
 )
@@ -288,36 +309,91 @@ function openLocalChanges(event: MouseEvent, wc: WorkingCopyEntry) {
   changesPopoverOpen.value = true
 }
 
-async function reloadSummaries(list: WorkingCopyEntry[]) {
-  const generation = ++summaryGeneration
-  const keepIds = new Set(list.map((wc) => wc.id))
+function syncSummaryCacheWithItems(list: WorkingCopyEntry[]) {
+  const byId = new Map(list.map((wc) => [wc.id, wc]))
   const next: Record<string, WorkingCopySummaryState> = {}
-  for (const wc of list) {
-    const old = summaryById.value[wc.id]
-    next[wc.id] = old ?? { uncommitted: 0, outdated: 0, loading: wc.available !== false, error: false }
-    if (wc.available === false) {
-      next[wc.id] = { uncommitted: 0, outdated: 0, loading: false, error: false }
-    }
+  for (const [id, state] of Object.entries(summaryById.value)) {
+    const wc = byId.get(id)
+    if (!wc) continue
+    next[id] =
+      wc.available === false
+        ? { uncommitted: 0, outdated: 0, loading: false, error: false }
+        : state
   }
   summaryById.value = next
 
-  const queue = list.filter((wc) => wc.available !== false && keepIds.has(wc.id))
-  const concurrency = 3
-  let cursor = 0
-
-  async function worker() {
-    while (cursor < queue.length && generation === summaryGeneration) {
-      const wc = queue[cursor++]
-      await reloadSummary(wc, () => generation === summaryGeneration)
+  // 清理队列中已移除或不可用的副本，并刷新队列内副本引用
+  for (let i = pendingSummaryQueue.length - 1; i >= 0; i--) {
+    const wc = byId.get(pendingSummaryQueue[i].id)
+    if (!wc || wc.available === false) {
+      queuedSummaryIds.delete(pendingSummaryQueue[i].id)
+      pendingSummaryQueue.splice(i, 1)
+    } else {
+      pendingSummaryQueue[i] = wc
     }
   }
+}
 
-  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker))
+// 将当前可见且尚未统计过的工作副本加入按需加载队列
+function enqueueVisibleSummaries(copies: WorkingCopyEntry[]) {
+  let added = false
+  const next = { ...summaryById.value }
+
+  for (const wc of copies) {
+    if (wc.available === false) {
+      if (!next[wc.id]) {
+        next[wc.id] = { uncommitted: 0, outdated: 0, loading: false, error: false }
+        added = true
+      }
+      continue
+    }
+    if (next[wc.id] || queuedSummaryIds.has(wc.id)) continue
+    next[wc.id] = { uncommitted: 0, outdated: 0, loading: true, error: false }
+    queuedSummaryIds.add(wc.id)
+    pendingSummaryQueue.push(wc)
+    added = true
+  }
+
+  if (added) summaryById.value = next
+  drainSummaryQueue()
+}
+
+function drainSummaryQueue() {
+  while (activeSummaryWorkers < SUMMARY_CONCURRENCY && pendingSummaryQueue.length > 0) {
+    const wc = pendingSummaryQueue.shift()!
+    queuedSummaryIds.delete(wc.id)
+
+    // 排队期间被折叠或移除的副本直接跳过并清除占位，把并发槽位让给当前展开的项目
+    const latest = store.items.find((item) => item.id === wc.id)
+    if (!latest || latest.available === false || !visibleCopyIds.value.has(wc.id)) {
+      if (summaryById.value[wc.id]?.loading) {
+        const next = { ...summaryById.value }
+        delete next[wc.id]
+        summaryById.value = next
+      }
+      continue
+    }
+
+    activeSummaryWorkers += 1
+    void reloadSummary(latest).finally(() => {
+      activeSummaryWorkers -= 1
+      drainSummaryQueue()
+    })
+  }
 }
 
 function reloadSummaryById(id: string) {
   const wc = store.items.find((item) => item.id === id)
   if (!wc || wc.available === false) {
+    return Promise.resolve()
+  }
+  // 当前处于折叠不可见状态时，只失效缓存，等用户下次展开再重新拉取
+  if (!visibleCopyIds.value.has(id)) {
+    if (summaryById.value[id]) {
+      const next = { ...summaryById.value }
+      delete next[id]
+      summaryById.value = next
+    }
     return Promise.resolve()
   }
   return reloadSummary(wc)
@@ -335,10 +411,7 @@ function scheduleSummaryReload(id: string) {
 }
 
 // 单副本请求独立编号，连续刷新时只接受最后一次返回结果。
-async function reloadSummary(
-  wc: WorkingCopyEntry,
-  isCurrent: () => boolean = () => true,
-) {
+async function reloadSummary(wc: WorkingCopyEntry) {
   const requestVersion = (summaryRequestVersions.get(wc.id) ?? 0) + 1
   summaryRequestVersions.set(wc.id, requestVersion)
   summaryById.value = {
@@ -351,13 +424,23 @@ async function reloadSummary(
   }
   try {
     const summary = await api.statusSummary(wc.path)
-    if (!isCurrent() || summaryRequestVersions.get(wc.id) !== requestVersion) return
+    if (
+      summaryRequestVersions.get(wc.id) !== requestVersion ||
+      !store.items.some((item) => item.id === wc.id)
+    ) {
+      return
+    }
     summaryById.value = {
       ...summaryById.value,
       [wc.id]: { ...summary, loading: false, error: false },
     }
   } catch {
-    if (!isCurrent() || summaryRequestVersions.get(wc.id) !== requestVersion) return
+    if (
+      summaryRequestVersions.get(wc.id) !== requestVersion ||
+      !store.items.some((item) => item.id === wc.id)
+    ) {
+      return
+    }
     summaryById.value = {
       ...summaryById.value,
       [wc.id]: {
@@ -374,7 +457,6 @@ async function pickAndAdd() {
     const dir = await open({ directory: true, multiple: false, title: '选择 SVN 工作副本目录' })
     if (!dir || typeof dir !== 'string') return
     await store.add(dir)
-    void reloadSummaries(store.items)
   } catch (e) {
     toast(e, '添加工作副本失败')
   }
