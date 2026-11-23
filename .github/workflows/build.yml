@@ -1,0 +1,77 @@
+name: Build macOS (Apple Silicon)
+
+on:
+  # 支持在 GitHub Actions 页面手动点击触发
+  workflow_dispatch:
+  # 推送 v* 标签（如 v0.1.0）时自动构建并创建 Draft Release
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+# 同一引用重复触发时取消旧任务，节省 macOS Runner 额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos:
+    runs-on: macos-latest # GitHub 托管的 Apple Silicon (arm64) Runner
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      # 缓存 Rust 编译依赖，显著缩短后续构建耗时
+      - name: 缓存 Rust 依赖与产物
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      # 手动触发：仅构建 dmg 并上传到 Actions Artifacts
+      - name: 构建 macOS 安装包（手动触发）
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run tauri build -- --target aarch64-apple-darwin --bundles dmg
+
+      - name: 上传安装包到 Artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: svn-client-macos-arm64
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          retention-days: 14
+
+      # 推送 v* 标签：构建 dmg 并自动创建 GitHub Draft Release
+      - name: 构建并发布 Draft Release（Tag 触发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'SVN Client ${{ github.ref_name }}'
+          releaseBody: |
+            macOS (Apple Silicon) 安装包见下方附件。
+
+            > 首次打开如提示「已损坏」或「无法验证开发者」，请将应用拖入 `/Applications` 后在终端执行：
+            > ```bash
+            > xattr -cr "/Applications/SVN Client.app"
+            > ```
+          releaseDraft: true
+          prerelease: false
+          args: --target aarch64-apple-darwin --bundles dmg
