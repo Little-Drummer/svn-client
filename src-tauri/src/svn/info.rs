@@ -3,7 +3,7 @@ use serde::Deserialize;
 use crate::errors::{AppError, AppResult};
 use crate::models::SvnInfo;
 
-use super::runner::run_svn;
+use super::runner::{run_svn, run_svn_with_timeout, REMOTE_SVN_TIMEOUT};
 
 // 这些结构体仅用于反序列化 svn info --xml 输出，对外用 SvnInfo
 #[derive(Debug, Deserialize)]
@@ -42,7 +42,13 @@ struct Commit {
 }
 
 pub fn svn_info(svn_bin: &str, target: &str) -> AppResult<SvnInfo> {
-    let out = run_svn(svn_bin, &["info", "--xml", "--non-interactive", target])?;
+    let args = ["info", "--xml", "--non-interactive", target];
+    // 远端 URL 查询走短超时，避免未连 VPN 时长时间等待
+    let out = if target.contains("://") {
+        run_svn_with_timeout(svn_bin, &args, REMOTE_SVN_TIMEOUT)?
+    } else {
+        run_svn(svn_bin, &args)?
+    };
     parse_svn_info_xml(&out.stdout)
 }
 

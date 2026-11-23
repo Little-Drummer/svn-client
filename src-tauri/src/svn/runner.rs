@@ -9,6 +9,8 @@ use crate::errors::{AppError, AppResult};
 
 /// 默认同步命令超时时间，避免网络异常时进程永久挂死
 const DEFAULT_SVN_TIMEOUT: Duration = Duration::from_secs(120);
+/// 远端网络查询（list / cat / info URL / 测试连接）超时时间，未连 VPN 时快速失败
+pub const REMOTE_SVN_TIMEOUT: Duration = Duration::from_secs(12);
 
 /// 解析 svn 输出可能的编码：先按 UTF-8 严格解码，失败再退回 GBK（Windows 中文环境常见）
 pub fn decode_output(bytes: &[u8]) -> String {

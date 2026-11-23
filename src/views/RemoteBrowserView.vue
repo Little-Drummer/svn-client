@@ -10,6 +10,7 @@ import LoadingSpinner from '@/components/ui-local/LoadingSpinner.vue'
 import ContextMenu, { type ContextMenuItem } from '@/components/ui-local/ContextMenu.vue'
 import LogView from './LogView.vue'
 import { useAppToast } from '@/composables/use-app-toast'
+import { createGeneration } from '@/composables/use-request-generation'
 import { api, describeError } from '../api/svn'
 import { useRepositoriesStore } from '../stores/repositories'
 import type { LogTarget, RemoteListEntry, RepositoryEntry } from '../types/svn'
@@ -43,6 +44,7 @@ const contentLoading = ref(false)
 const fileContent = ref('')
 const manualUrl = ref('')
 const previewOpen = ref(false)
+const loadGen = createGeneration()
 
 const repoRoot = computed(() => props.repository?.url.trim().replace(/\/+$/, '') ?? '')
 
@@ -123,6 +125,7 @@ function formatDate(value?: string | null) {
 
 async function load(url = currentUrl.value) {
   if (!props.repository || !url.trim()) return
+  const token = loadGen.next()
   loading.value = true
   selected.value = null
   fileContent.value = ''
@@ -136,13 +139,15 @@ async function load(url = currentUrl.value) {
       url: currentUrl.value,
       username: props.repository.username ?? undefined,
     })
+    if (!loadGen.isCurrent(token)) return
     tree.value = list.map((e) => makeNode(e, 0))
     if (props.repository) repoStore.setLastBrowsedUrl(props.repository.id, currentUrl.value)
   } catch (e) {
+    if (!loadGen.isCurrent(token)) return
     tree.value = []
     toast.error('加载远端目录失败', describeError(e))
   } finally {
-    loading.value = false
+    if (loadGen.isCurrent(token)) loading.value = false
   }
 }
 

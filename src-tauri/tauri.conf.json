@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "SVN Client",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "win.yjxw.svn-client",
   "build": {
     "frontendDist": "../dist",

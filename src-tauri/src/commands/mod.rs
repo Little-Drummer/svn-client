@@ -29,7 +29,9 @@ use crate::svn::package::{
 };
 use crate::svn::project::{group_working_copies, scan_project_dir};
 use crate::svn::rollback::{rollback_revision, RollbackResult};
-use crate::svn::runner::{check_svn_version, run_svn};
+use crate::svn::runner::{
+    check_svn_version, run_svn, run_svn_with_timeout, REMOTE_SVN_TIMEOUT,
+};
 use crate::svn::shelve::{apply_shelf, create_shelf, delete_shelf, list_shelves, ShelfEntry};
 use crate::svn::status::{svn_status, svn_status_verbose_all, svn_status_with_updates};
 
@@ -135,8 +137,8 @@ pub fn remove_repository(state: State<ConfigState>, id: String) -> AppResult<()>
 }
 
 #[tauri::command]
-pub fn test_repository_connection(
-    state: State<ConfigState>,
+pub async fn test_repository_connection(
+    state: State<'_, ConfigState>,
     id: Option<String>,
     url: String,
     username: Option<String>,
@@ -146,17 +148,21 @@ pub fn test_repository_connection(
         return Err(AppError::Other("仓库 URL 不能为空".into()));
     }
     let bin = state.svn_bin();
-    let mut args: Vec<String> = vec!["info".into(), "--xml".into(), "--non-interactive".into()];
-    if let Some(u) = username {
-        if !u.trim().is_empty() {
-            args.push("--username".into());
-            args.push(u);
+    let info = tauri::async_runtime::spawn_blocking(move || {
+        let mut args: Vec<String> = vec!["info".into(), "--xml".into(), "--non-interactive".into()];
+        if let Some(u) = username {
+            if !u.trim().is_empty() {
+                args.push("--username".into());
+                args.push(u);
+            }
         }
-    }
-    args.push(url.clone());
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run_svn(&bin, &arg_refs)?;
-    let info = crate::svn::info::parse_svn_info_xml(&out.stdout)?;
+        args.push(url);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = run_svn_with_timeout(&bin, &arg_refs, REMOTE_SVN_TIMEOUT)?;
+        crate::svn::info::parse_svn_info_xml(&out.stdout)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("测试仓库连接任务失败: {e}")))??;
 
     if let Some(repo_id) = id {
         let mut cfg = state
@@ -174,29 +180,39 @@ pub fn test_repository_connection(
 }
 
 #[tauri::command]
-pub fn svn_list_remote(
-    state: State<ConfigState>,
+pub async fn svn_list_remote(
+    state: State<'_, ConfigState>,
     url: String,
     username: Option<String>,
 ) -> AppResult<Vec<RemoteListEntry>> {
-    if url.trim().is_empty() {
+    let url = url.trim().to_string();
+    if url.is_empty() {
         return Err(AppError::Other("远端 URL 不能为空".into()));
     }
     let bin = state.svn_bin();
-    run_svn_list_remote(&bin, url.trim(), username.as_deref())
+    tauri::async_runtime::spawn_blocking(move || {
+        run_svn_list_remote(&bin, &url, username.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("读取远端目录任务失败: {e}")))?
 }
 
 #[tauri::command]
-pub fn svn_cat_remote(
-    state: State<ConfigState>,
+pub async fn svn_cat_remote(
+    state: State<'_, ConfigState>,
     url: String,
     username: Option<String>,
 ) -> AppResult<String> {
-    if url.trim().is_empty() {
+    let url = url.trim().to_string();
+    if url.is_empty() {
         return Err(AppError::Other("远端文件 URL 不能为空".into()));
     }
     let bin = state.svn_bin();
-    run_svn_cat_remote(&bin, url.trim(), username.as_deref())
+    tauri::async_runtime::spawn_blocking(move || {
+        run_svn_cat_remote(&bin, &url, username.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("读取远端文件任务失败: {e}")))?
 }
 
 #[tauri::command]

@@ -3,7 +3,7 @@ use serde::Deserialize;
 use crate::errors::AppResult;
 use crate::models::RemoteListEntry;
 
-use super::runner::run_svn;
+use super::runner::{run_svn_with_timeout, REMOTE_SVN_TIMEOUT};
 
 #[derive(Debug, Deserialize)]
 struct ListsRoot {
@@ -55,7 +55,7 @@ pub fn svn_list_remote(
     }
     args.push(url.to_string());
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run_svn(svn_bin, &arg_refs)?;
+    let out = run_svn_with_timeout(svn_bin, &arg_refs, REMOTE_SVN_TIMEOUT)?;
     let parsed: ListsRoot = quick_xml::de::from_str(&out.stdout)?;
 
     let mut result = Vec::new();
@@ -101,6 +101,6 @@ pub fn svn_cat_remote(svn_bin: &str, url: &str, username: Option<&str>) -> AppRe
     }
     args.push(url.to_string());
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run_svn(svn_bin, &arg_refs)?;
+    let out = run_svn_with_timeout(svn_bin, &arg_refs, REMOTE_SVN_TIMEOUT)?;
     Ok(out.stdout)
 }
